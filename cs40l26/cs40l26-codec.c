@@ -591,7 +591,7 @@ static struct snd_soc_dai_driver cs40l26_dai[] = {
 			.formats = CS40L26_FORMATS,
 		},
 		.ops = &cs40l26_dai_ops,
-		.symmetric_rates = 1,
+		.symmetric_rate = 1,
 	},
 };
 

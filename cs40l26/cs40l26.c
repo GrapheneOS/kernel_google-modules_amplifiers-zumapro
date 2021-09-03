@@ -3201,7 +3201,7 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 	if (ret)
 		goto err;
 
-	request_firmware_nowait(THIS_MODULE, FW_ACTION_HOTPLUG,
+	request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT,
 			CS40L26_FW_FILE_NAME, dev, GFP_KERNEL, cs40l26,
 			cs40l26_firmware_load);
 
