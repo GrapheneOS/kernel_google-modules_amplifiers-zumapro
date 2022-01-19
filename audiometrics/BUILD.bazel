@@ -13,8 +13,8 @@ kernel_module(
     outs = [
         "audiometrics.ko",
     ],
-    kernel_build = "//gs/kernel/device-modules:slider",
+    kernel_build = "//gs/google-modules/soc-modules:slider",
     visibility = [
-        "//gs/kernel/device-modules:__pkg__",
+        "//gs/google-modules/soc-modules:__pkg__",
     ],
 )
