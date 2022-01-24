@@ -46,7 +46,7 @@
 
 #include "wm_adsp.h"
 #include "cs35l41.h"
-#include <sound/cs35l41.h>
+#include "sound/cs35l41-private.h"
 #if IS_ENABLED(CONFIG_SND_SOC_CODEC_DETECT)
 #include <linux/codec-misc.h>
 struct cs35l41_misc_priv_type {

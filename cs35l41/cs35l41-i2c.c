@@ -32,7 +32,7 @@
 
 #include "wm_adsp.h"
 #include "cs35l41.h"
-#include <sound/cs35l41.h>
+#include "sound/cs35l41-private.h"
 
 static struct regmap_config cs35l41_regmap_i2c = {
 	.reg_bits = 32,
