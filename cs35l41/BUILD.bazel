@@ -16,8 +16,8 @@ kernel_module(
         "snd-soc-cs35l41-spi.ko",
         "snd-soc-wm-adsp.ko",
     ],
-    kernel_build = "//gs/google-modules/soc-modules:slider",
+    kernel_build = "//private/google-modules/soc/gs:slider",
     visibility = [
-        "//gs/google-modules/soc-modules:__pkg__",
+        "//private/google-modules/soc/gs:__pkg__",
     ],
 )

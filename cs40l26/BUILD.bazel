@@ -6,7 +6,7 @@
 # unless you have coordinated with the team managing the Soong to Bazel
 # migration.
 
-load("//build/kleaf:kernel.bzl", "kernel_module")
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
 
 kernel_module(
     name = "cs40l26.cloudripper",
@@ -14,8 +14,8 @@ kernel_module(
         "cl_dsp.ko",
         "input-cs40l26-i2c.ko",
     ],
-    kernel_build = "//private/gs-google:cloudripper",
+    kernel_build = "//private/google-modules/soc/gs:cloudripper",
     visibility = [
-        "//private/gs-google:__pkg__",
+        "//private/google-modules/soc/gs:__pkg__",
     ],
 )
