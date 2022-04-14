@@ -1787,7 +1787,7 @@ static int drv2624_i2c_probe(struct i2c_client *client,
 	if (err)
 		goto drv2624_i2c_probe_err;
 
-	request_firmware_nowait(THIS_MODULE, FW_ACTION_HOTPLUG, "drv2624.bin",
+	request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT, "drv2624.bin",
 				&client->dev, GFP_KERNEL, drv2624,
 				drv2624_firmware_load);
 

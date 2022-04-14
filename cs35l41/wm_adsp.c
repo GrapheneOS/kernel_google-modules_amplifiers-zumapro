@@ -2966,11 +2966,11 @@ static int wm_adsp_load_coeff(struct wm_adsp *dsp)
 
 		case WMFW_HALO_PM_PACKED:
 			burst_multiple += 8; /* plus the 8 below yields 20 */
-			/* fall through */
+			fallthrough;
 		case WMFW_HALO_XM_PACKED:
 		case WMFW_HALO_YM_PACKED:
 			burst_multiple += 8; /* yields 12 */
-			/* fall through */
+			fallthrough;
 		case WMFW_ADSP1_DM:
 		case WMFW_ADSP1_ZM:
 		case WMFW_ADSP2_XM:

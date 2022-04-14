@@ -1241,7 +1241,7 @@ static ssize_t cs40l2x_cp_trigger_index_impl(struct cs40l2x_private *cs40l2x,
 		gpio_rise = true;
 		gpio_index = CS40L2X_GPIO_RISE;
 		gpio_slot = cs40l2x->virtual_gpio1_rise_slot;
-		/* Intentional fall through */
+		fallthrough;
 	case CS40L2X_INDEX_GP1F_OVWR:
 		if (cs40l2x->last_type_entered ==
 			CS40L2X_WT_TYPE_10_COMP_FILE) {
@@ -1294,7 +1294,7 @@ static ssize_t cs40l2x_cp_trigger_index_impl(struct cs40l2x_private *cs40l2x,
 			ret = -EPERM;
 			break;
 		}
-		/* intentionally fall through */
+		fallthrough;
 	case CS40L2X_INDEX_DIAG:
 		if (cs40l2x->fw_desc->id == cs40l2x->fw_id_remap)
 			ret = cs40l2x_firmware_swap(cs40l2x,
@@ -7669,7 +7669,7 @@ static void cs40l2x_vibe_start_worker(struct work_struct *work)
 			if (ret)
 				goto err_mutex;
 		}
-	/* intentional fall through */
+		fallthrough;
 	case CS40L2X_INDEX_VIBE:
 	case CS40L2X_INDEX_CONT_MIN ... CS40L2X_INDEX_CONT_MAX:
 	case CS40L2X_INDEX_QEST:
@@ -7681,7 +7681,7 @@ static void cs40l2x_vibe_start_worker(struct work_struct *work)
 						* 1000000),
 				HRTIMER_MODE_REL);
 #endif /* CONFIG_ANDROID_TIMED_OUTPUT */
-	/* intentional fall through */
+		fallthrough;
 	case CS40L2X_INDEX_PBQ:
 		if (cs40l2x->vibe_state != CS40L2X_VIBE_STATE_RUNNING)
 			cs40l2x_wl_apply(cs40l2x);
@@ -7951,8 +7951,7 @@ static void cs40l2x_vibe_stop_worker(struct work_struct *work)
 				cs40l2x->peak_gpio1_enable);
 		if (ret)
 			dev_err(dev, "Failed to restore GPIO1 configuration\n");
-		/* intentionally fall through */
-
+		fallthrough;
 	case CS40L2X_INDEX_VIBE:
 	case CS40L2X_INDEX_CONT_MIN ... CS40L2X_INDEX_CONT_MAX:
 		ret = cs40l2x_stop_playback(cs40l2x);
@@ -9674,7 +9673,7 @@ static void cs40l2x_firmware_load(const struct firmware *fw, void *context)
 				CS40L2X_CLAB_CONFIG_FILE_NAME,
 				CS40L2X_WT_FILE_NAME_LEN_MAX))
 			cs40l2x->clab_bin_found = true;
-		request_firmware_nowait(THIS_MODULE, FW_ACTION_HOTPLUG,
+		request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT,
 				cs40l2x->fw_desc->coeff_files[i], dev,
 				GFP_KERNEL, cs40l2x, cs40l2x_coeff_file_load);
 	}
@@ -11393,7 +11392,7 @@ static irqreturn_t cs40l2x_irq(int irq, void *data)
 		case CS40L2X_EVENT_CTRL_TRIG_STOP:
 			queue_work(cs40l2x->vibe_workqueue,
 					&cs40l2x->vibe_pbq_work);
-			/* intentionally fall through */
+			fallthrough;
 		case CS40L2X_EVENT_CTRL_GPIO_STOP:
 			if (asp_timeout > 0)
 				hrtimer_start(&cs40l2x->asp_timer,
@@ -11694,7 +11693,7 @@ static int cs40l2x_i2c_probe(struct i2c_client *i2c_client,
 	if (ret)
 		goto err;
 
-	request_firmware_nowait(THIS_MODULE, FW_ACTION_HOTPLUG,
+	request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT,
 			cs40l2x->fw_desc->fw_file, dev, GFP_KERNEL, cs40l2x,
 			cs40l2x_firmware_load);
 
