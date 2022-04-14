@@ -270,7 +270,6 @@ static int cs35l41_dsp_load_ev(struct snd_soc_dapm_widget *w,
 		snd_soc_component_get_drvdata(component);
 	enum cs35l41_cspl_mboxcmd mboxcmd = CSPL_MBOX_CMD_NONE;
 	enum cs35l41_cspl_mboxstate fw_status = CSPL_MBOX_STS_RUNNING;
-	int ret = 0;
 
 	dev_info(cs35l41->dev, "%s: event: %d halo_booted: %d\n",
 				__func__, event, cs35l41->halo_booted);
@@ -307,7 +306,7 @@ static int cs35l41_dsp_load_ev(struct snd_soc_dapm_widget *w,
 				fw_status);
 			break;
 		}
-		ret = cs35l41_set_csplmboxcmd(cs35l41, mboxcmd);
+		cs35l41_set_csplmboxcmd(cs35l41, mboxcmd);
 		break;
 	default:
 		break;
@@ -503,17 +502,16 @@ static int cs35l41_ccm_reset_put(struct snd_kcontrol *kcontrol,
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
 	unsigned int val = 0;
-	int ret = 0;
 
 	val = ucontrol->value.integer.value[0];
 
 	if (val) {
-		ret = regmap_update_bits(cs35l41->regmap, CS35L41_DSP_CLK_CTRL,
+		regmap_update_bits(cs35l41->regmap, CS35L41_DSP_CLK_CTRL,
 			0x3, 0x2);
-		ret = regmap_update_bits(cs35l41->regmap,
+		regmap_update_bits(cs35l41->regmap,
 			CS35L41_DSP1_CCM_CORE_CTRL,
 			CS35L41_HALO_CORE_RESET, CS35L41_HALO_CORE_RESET);
-		ret = regmap_update_bits(cs35l41->regmap, CS35L41_DSP_CLK_CTRL,
+		regmap_update_bits(cs35l41->regmap, CS35L41_DSP_CLK_CTRL,
 			0x3, 0x3);
 	}
 
@@ -545,7 +543,10 @@ static int cs35l41_hibernate_force_wake_put(struct snd_kcontrol *kcontrol,
 	unsigned int amp_active;
 
 	regmap_read(cs35l41->regmap, CS35L41_PWR_CTRL1, &amp_active);
+	dev_info(cs35l41->dev, "hb force wake %d from hibernate state %d\n",
+		cs35l41->hibernate_force_wake, cs35l41->amp_hibernate);
 
+	mutex_lock(&cs35l41->hb_forcewake_lock);
 	if (cs35l41->amp_hibernate == CS35L41_HIBERNATE_AWAKE ||
 		(cs35l41->amp_hibernate == CS35L41_HIBERNATE_NOT_LOADED &&
 		 cs35l41->dsp.running)) {
@@ -568,7 +569,7 @@ static int cs35l41_hibernate_force_wake_put(struct snd_kcontrol *kcontrol,
 			mutex_unlock(&cs35l41->hb_lock);
 		}
 	}
-
+	mutex_unlock(&cs35l41->hb_forcewake_lock);
 	return 0;
 }
 
@@ -1501,6 +1502,45 @@ static int cs35l41_put_ramp_knee_time(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+static int cs35l41_default_96k_get(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component;
+	struct cs35l41_private *cs35l41;
+
+	component = snd_soc_kcontrol_component(kcontrol);
+	cs35l41 = snd_soc_component_get_drvdata(component);
+
+	ucontrol->value.integer.value[0] =
+		(cs35l41->reset_cache.fs_cfg == CS35L41_FS_96K);
+	return 0;
+}
+
+static int cs35l41_default_96k_put(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component;
+	struct cs35l41_private *cs35l41;
+
+	component = snd_soc_kcontrol_component(kcontrol);
+	cs35l41 = snd_soc_component_get_drvdata(component);
+
+	if (ucontrol->value.integer.value[0] < 0 ||
+	    ucontrol->value.integer.value[0] > 1)
+		return -EINVAL;
+
+	cs35l41->reset_cache.fs_cfg =
+		ucontrol->value.integer.value[0] == 1 ?
+		CS35L41_FS_96K : CS35L41_FS_48K;
+
+	regmap_update_bits(cs35l41->regmap, CS35L41_GLOBAL_CLK_CTRL,
+		CS35L41_GLOBAL_FS_MASK,
+		cs35l41->reset_cache.fs_cfg << CS35L41_GLOBAL_FS_SHIFT);
+
+	pr_info("update global fs to %d\n", cs35l41->reset_cache.fs_cfg);
+	return 0;
+}
+
 static const char * const cs35l41_output_dev_text[] = {
 	"Speaker",
 	"Receiver",
@@ -1631,6 +1671,8 @@ static const struct snd_kcontrol_new cs35l41_aud_controls[] = {
 	SOC_SINGLE_EXT("IMP", SND_SOC_NOPM, 0, 0xFFFFFFFF, 0,
 			cs35l41_imp_get, cs35l41_imp_put),
 #endif
+	SOC_SINGLE_EXT("Default 96K", SND_SOC_NOPM, 0, 1, 0,
+			cs35l41_default_96k_get, cs35l41_default_96k_put),
 };
 
 static const struct cs35l41_otp_map_element_t *cs35l41_find_otp_map(u32 otp_id)
@@ -1937,10 +1979,10 @@ static int cs35l41_hibernate(struct snd_soc_dapm_widget *w,
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
 	int ret = 0;
-
+	dev_info(cs35l41->dev, "%s event 0x%x hibernate state %d\n",
+		__func__, event, cs35l41->amp_hibernate);
 	if (!cs35l41->dsp.running ||
-	     cs35l41->amp_hibernate == CS35L41_HIBERNATE_INCOMPATIBLE ||
-	     cs35l41->hibernate_force_wake)
+	     cs35l41->amp_hibernate == CS35L41_HIBERNATE_INCOMPATIBLE)
 		return 0;
 
 	switch (event) {
@@ -1951,8 +1993,11 @@ static int cs35l41_hibernate(struct snd_soc_dapm_widget *w,
 		mutex_unlock(&cs35l41->hb_lock);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
-		queue_delayed_work(cs35l41->wq, &cs35l41->hb_work,
-					msecs_to_jiffies(2000));
+		mutex_lock(&cs35l41->hb_forcewake_lock);
+		if (!cs35l41->hibernate_force_wake)
+			queue_delayed_work(cs35l41->wq, &cs35l41->hb_work,
+						msecs_to_jiffies(2000));
+		mutex_unlock(&cs35l41->hb_forcewake_lock);
 		break;
 	default:
 		dev_err(cs35l41->dev, "Invalid event = 0x%x\n", event);
@@ -2087,7 +2132,20 @@ static int cs35l41_main_amp_event(struct snd_soc_dapm_widget *w,
 	return ret;
 }
 
-static int cs35l41_asprx_event(struct snd_soc_dapm_widget *w,
+static void cs35l41_mute_amp(struct cs35l41_private *cs35l41)
+{
+	bool mute = !(cs35l41->asprx1_enabled || cs35l41->asprx2_enabled);
+
+	if (mute) {
+		regmap_update_bits(cs35l41->regmap, CS35L41_AMP_OUT_MUTE,
+				CS35L41_AMP_MUTE_MASK, CS35L41_AMP_MUTE_MASK);
+	} else {
+		regmap_update_bits(cs35l41->regmap, CS35L41_AMP_OUT_MUTE,
+				CS35L41_AMP_MUTE_MASK, 0);
+	}
+}
+
+static int cs35l41_asprx1_event(struct snd_soc_dapm_widget *w,
 		struct snd_kcontrol *kcontrol, int event)
 {
 	struct snd_soc_component *component =
@@ -2098,18 +2156,44 @@ static int cs35l41_asprx_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		regmap_update_bits(cs35l41->regmap, CS35L41_AMP_OUT_MUTE,
-				CS35L41_AMP_MUTE_MASK, 0);
+		cs35l41->asprx1_enabled = true;
 		break;
 	case SND_SOC_DAPM_PRE_PMD:
-		regmap_update_bits(cs35l41->regmap, CS35L41_AMP_OUT_MUTE,
-				CS35L41_AMP_MUTE_MASK, CS35L41_AMP_MUTE_MASK);
+		cs35l41->asprx1_enabled = false;
 		break;
 	default:
 		dev_err(cs35l41->dev, "Invalid event = 0x%x\n", event);
 		ret = -EINVAL;
 		break;
 	}
+	if (ret == 0)
+		cs35l41_mute_amp(cs35l41);
+	return ret;
+}
+
+static int cs35l41_asprx2_event(struct snd_soc_dapm_widget *w,
+		struct snd_kcontrol *kcontrol, int event)
+{
+	struct snd_soc_component *component =
+		snd_soc_dapm_to_component(w->dapm);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+	int ret = 0;
+
+	switch (event) {
+	case SND_SOC_DAPM_POST_PMU:
+		cs35l41->asprx2_enabled = true;
+		break;
+	case SND_SOC_DAPM_PRE_PMD:
+		cs35l41->asprx2_enabled = false;
+		break;
+	default:
+		dev_err(cs35l41->dev, "Invalid event = 0x%x\n", event);
+		ret = -EINVAL;
+		break;
+	}
+	if (ret == 0)
+		cs35l41_mute_amp(cs35l41);
 	return ret;
 }
 
@@ -2123,10 +2207,10 @@ static const struct snd_soc_dapm_widget cs35l41_dapm_widgets[] = {
 				cs35l41_dsp_load_ev, SND_SOC_DAPM_POST_PMU),
 	SND_SOC_DAPM_OUTPUT("SPK"),
 	SND_SOC_DAPM_AIF_IN_E("ASPRX1", NULL, 0, CS35L41_SP_ENABLES, 16, 0,
-				cs35l41_asprx_event,
+				cs35l41_asprx1_event,
 				SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
 	SND_SOC_DAPM_AIF_IN_E("ASPRX2", NULL, 0, CS35L41_SP_ENABLES, 17, 0,
-				cs35l41_asprx_event,
+				cs35l41_asprx2_event,
 				SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
 	SND_SOC_DAPM_AIF_OUT("ASPTX1", NULL, 0, CS35L41_SP_ENABLES, 0, 0),
 	SND_SOC_DAPM_AIF_OUT("ASPTX2", NULL, 0, CS35L41_SP_ENABLES, 1, 0),
@@ -2560,18 +2644,18 @@ static int cs35l41_dai_set_sysclk(struct snd_soc_dai *dai,
 	unsigned int fs2_val;
 	unsigned int val;
 
-	fsIndex = cs35l41_get_fs_mon_config_index(freq);
-	if (fsIndex < 0) {
-		dev_err(cs35l41->dev, "Invalid CLK Config freq: %u\n", freq);
-		return -EINVAL;
-	}
-
 	/* Need the SCLK Frequency regardless of sysclk source */
 	cs35l41->sclk = freq;
 
 	dev_dbg(cs35l41->dev, "Set DAI sysclk %d\n", freq);
 	if (cs35l41->sclk <= 6144000) {
 		/* Use the lookup table */
+		fsIndex = cs35l41_get_fs_mon_config_index(freq);
+		if (fsIndex < 0) {
+			dev_err(cs35l41->dev, "Invalid CLK Config freq: %u\n", freq);
+			return -EINVAL;
+		}
+
 		fs1_val = cs35l41_fs_mon[fsIndex].fs1;
 		fs2_val = cs35l41_fs_mon[fsIndex].fs2;
 	} else {
@@ -2848,13 +2932,26 @@ static int cs35l41_set_pdata(struct cs35l41_private *cs35l41)
 	return 0;
 }
 
+static const char * const dapm_names[] = { "SPK", "VP", "VBST", "ISENSE",
+	"VSENSE", "TEMP", "AMP Playback", "AMP Capture" };
+
+static void cs35l41_component_ignore_suspend(struct snd_soc_component *component)
+{
+	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(dapm_names); i++) {
+		pr_debug("snd_soc_dapm_ignore_suspend dapm name[%s]", dapm_names[i]);
+		snd_soc_dapm_ignore_suspend(dapm, dapm_names[i]);
+	}
+	snd_soc_dapm_sync(dapm);
+}
+
 static int cs35l41_component_probe(struct snd_soc_component *component)
 {
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
 	struct snd_kcontrol_new *kcontrol;
-	struct snd_soc_dapm_context *dapm =
-			snd_soc_component_get_dapm(component);
 	int ret = 0;
 
 	component->regmap = cs35l41->regmap;
@@ -2886,26 +2983,8 @@ static int cs35l41_component_probe(struct snd_soc_component *component)
 			       "snd_soc_add_codec_controls failed (%d)\n", ret);
 		kfree(kcontrol);
 	}
-	if (component->name_prefix && !strcmp(component->name_prefix, "R")) {
-		snd_soc_dapm_ignore_suspend(dapm, "R SPK");
-		snd_soc_dapm_ignore_suspend(dapm, "R VP");
-		snd_soc_dapm_ignore_suspend(dapm, "R VBST");
-		snd_soc_dapm_ignore_suspend(dapm, "R ISENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "R VSENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "R TEMP");
-		snd_soc_dapm_ignore_suspend(dapm, "R AMP Playback");
-		snd_soc_dapm_ignore_suspend(dapm, "R AMP Capture");
-	} else {
-		snd_soc_dapm_ignore_suspend(dapm, "AMP Playback");
-		snd_soc_dapm_ignore_suspend(dapm, "VBST");
-		snd_soc_dapm_ignore_suspend(dapm, "SPK");
-		snd_soc_dapm_ignore_suspend(dapm, "VP");
-		snd_soc_dapm_ignore_suspend(dapm, "ISENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "VSENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "TEMP");
-		snd_soc_dapm_ignore_suspend(dapm, "AMP Capture");
-	}
-	snd_soc_dapm_sync(dapm);
+
+	cs35l41_component_ignore_suspend(component);
 exit:
 	return ret;
 }
@@ -3350,7 +3429,7 @@ static int cs35l41_enter_hibernate(struct cs35l41_private *cs35l41)
 {
 	int i;
 
-	dev_dbg(cs35l41->dev, "%s: hibernate state %d\n",
+	dev_info(cs35l41->dev, "%s: hibernate state %d\n",
 		__func__, cs35l41->amp_hibernate);
 
 	if (cs35l41->amp_hibernate == CS35L41_HIBERNATE_STANDBY)
@@ -3404,7 +3483,7 @@ static int cs35l41_exit_hibernate(struct cs35l41_private *cs35l41)
 	u8 total_trim_cache_reg_size = 0;
 	u32 *p_trim_data = NULL;
 
-	dev_dbg(cs35l41->dev, "%s: hibernate state %d\n",
+	dev_info(cs35l41->dev, "%s: hibernate state %d\n",
 		__func__, cs35l41->amp_hibernate);
 
 	if (cs35l41->amp_hibernate != CS35L41_HIBERNATE_STANDBY)
@@ -3594,18 +3673,6 @@ static int cs35l41_restore(struct cs35l41_private *cs35l41)
 		regid, reg_revid);
 
 	cs35l41_set_pdata(cs35l41);
-
-	/* Restore cached values set by ALSA during or before amp reset */
-	regmap_update_bits(cs35l41->regmap,
-			CS35L41_SP_FRAME_RX_SLOT,
-			CS35L41_ASP_RX1_SLOT_MASK,
-			((cs35l41->pdata.right_channel) ? 1 : 0)
-			<< CS35L41_ASP_RX1_SLOT_SHIFT);
-	regmap_update_bits(cs35l41->regmap,
-			CS35L41_SP_FRAME_RX_SLOT,
-			CS35L41_ASP_RX2_SLOT_MASK,
-			((cs35l41->pdata.right_channel) ? 0 : 1)
-			<< CS35L41_ASP_RX2_SLOT_SHIFT);
 
 	if (cs35l41->reset_cache.extclk_cfg) {
 	/* These values are already cached in cs35l41_private struct */
@@ -3929,10 +3996,13 @@ int cs35l41_probe(struct cs35l41_private *cs35l41,
 			goto err;
 		}
 
-		if (cs35l41->pdata.hibernate_enable)
+		if (cs35l41->pdata.hibernate_enable) {
 			cs35l41->amp_hibernate = CS35L41_HIBERNATE_NOT_LOADED;
-		else
+			cs35l41->hibernate_force_wake = 1;
+		} else {
 			cs35l41->amp_hibernate = CS35L41_HIBERNATE_INCOMPATIBLE;
+			cs35l41->hibernate_force_wake = 0;
+		}
 
 		cs35l41->reset_cache.extclk_cfg = false;
 		cs35l41->reset_cache.asp_wl = -1;
@@ -3999,6 +4069,7 @@ int cs35l41_probe(struct cs35l41_private *cs35l41,
 
 	INIT_DELAYED_WORK(&cs35l41->hb_work, cs35l41_hibernate_work);
 	mutex_init(&cs35l41->hb_lock);
+	mutex_init(&cs35l41->hb_forcewake_lock);
 	return 0;
 err_codec:
 	snd_soc_unregister_component(cs35l41->dev);
@@ -4021,6 +4092,7 @@ int cs35l41_remove(struct cs35l41_private *cs35l41)
 #endif
 	destroy_workqueue(cs35l41->wq);
 	mutex_destroy(&cs35l41->hb_lock);
+	mutex_destroy(&cs35l41->hb_forcewake_lock);
 	destroy_workqueue(cs35l41->vol_ctl.ramp_wq);
 	mutex_destroy(&cs35l41->vol_ctl.vol_mutex);
 	regmap_write(cs35l41->regmap, CS35L41_IRQ1_MASK1, 0xFFFFFFFF);
