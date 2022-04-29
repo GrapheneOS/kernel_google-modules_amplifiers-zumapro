@@ -30,6 +30,7 @@
 #include <linux/uaccess.h>
 #include <linux/regulator/consumer.h>
 #include <linux/delay.h>
+#include <linux/completion.h>
 #include <linux/firmware.h>
 #include <linux/sysfs.h>
 #include <linux/bitops.h>
@@ -636,10 +637,13 @@
 #define CS40L26_INPUT_DEV_NAME		"cs40l26_input"
 #define CS40L26_DEVID_A			0x40A260
 #define CS40L26_DEVID_B			0x40A26B
+#define CS40L26_DEVID_L27_A		0x40A270
+#define CS40L26_DEVID_L27_B		0x40A27B
 #define CS40L26_DEVID_MASK		GENMASK(23, 0)
-#define CS40L26_NUM_DEVS		2
+#define CS40L26_NUM_DEVS		4
 
 #define CS40L26_REVID_A1		0xA1
+#define CS40L26_REVID_B0		0xB0
 #define CS40L26_REVID_MASK		GENMASK(7, 0)
 
 #define CS40L26_GLOBAL_EN_MASK		BIT(0)
@@ -703,8 +707,8 @@
 #define CS40L26_EXT_ALGO_ID		0x0004013C
 
 /* power management */
-#define CS40L26_PSEQ_ROM_OFFSET_WORDS_A1 24
-#define CS40L26_PSEQ_MAX_WORDS_PER_OP CS40L26_PSEQ_OP_WRITE_FIELD_WORDS
+#define CS40L26_PSEQ_ROM_END_OF_SCRIPT	0x028003E8
+#define CS40L26_PSEQ_MAX_WORDS_PER_OP	CS40L26_PSEQ_OP_WRITE_FIELD_WORDS
 #define CS40L26_PSEQ_MAX_WORDS			129
 #define CS40L26_PSEQ_NUM_OPS			8
 #define CS40L26_PSEQ_OP_MASK			GENMASK(23, 16)
@@ -811,6 +815,7 @@
 #define CS40L26_DSP_MBOX_COMPLETE_I2S		0x01000002
 #define CS40L26_DSP_MBOX_TRIGGER_CP		0x01000010
 #define CS40L26_DSP_MBOX_TRIGGER_GPIO		0x01000011
+#define CS40L26_DSP_MBOX_TRIGGER_I2S		0x01000012
 #define CS40L26_DSP_MBOX_PM_AWAKE		0x02000002
 #define CS40L26_DSP_MBOX_F0_EST_START		0x07000011
 #define CS40L26_DSP_MBOX_F0_EST_DONE		0x07000021
@@ -854,7 +859,7 @@
 #define CS40L26_FW_ID			0x1800D4
 #define CS40L26_FW_ROM_MIN_REV		0x040000
 #define CS40L26_FW_A0_RAM_MIN_REV	0x050004
-#define CS40L26_FW_A1_RAM_MIN_REV	0x070218
+#define CS40L26_FW_A1_RAM_MIN_REV	0x07021C
 #define CS40L26_FW_CALIB_ID		0x1800DA
 #define CS40L26_FW_CALIB_MIN_REV	0x010000
 #define CS40L26_FW_BRANCH_MASK		GENMASK(23, 21)
@@ -1088,6 +1093,8 @@
 #define CS40L26_ASP_FMT_I2S			0x2
 #define CS40L26_ASP_FMT_TDM1P5			0x4
 
+#define CS40L26_ASP_START_TIMEOUT		50 /* milliseconds */
+
 #define CS40L26_PLL_REFCLK_BCLK		0x0
 #define CS40L26_PLL_REFCLK_FSYNC		0x1
 #define CS40L26_PLL_REFCLK_MCLK		0x5
@@ -1292,12 +1299,6 @@ enum cs40l26_vibe_state_event {
 	CS40L26_VIBE_STATE_EVENT_ASP_STOP,
 };
 
-enum cs40l26_fw_mode {
-	CS40L26_FW_MODE_ROM,
-	CS40L26_FW_MODE_RAM,
-	CS40L26_FW_MODE_NONE,
-};
-
 enum cs40l26_err_rls {
 	CS40L26_RSRVD_ERR_RLS,/* 0 */
 	CS40L26_AMP_SHORT_ERR_RLS,/* 1 */
@@ -1479,7 +1480,7 @@ struct cs40l26_private {
 	u32 pseq_base;
 	struct list_head pseq_op_head;
 	enum cs40l26_pm_state pm_state;
-	enum cs40l26_fw_mode fw_mode;
+	bool fw_defer;
 	enum cs40l26_vibe_state vibe_state;
 	int num_loaded_coeff_files;
 	struct cs40l26_fw fw;
@@ -1504,6 +1505,7 @@ struct cs40l26_private {
 	bool comp_enable_pend;
 	bool comp_enable_redc;
 	bool comp_enable_f0;
+	struct completion i2s_cont;
 };
 
 struct cs40l26_codec {

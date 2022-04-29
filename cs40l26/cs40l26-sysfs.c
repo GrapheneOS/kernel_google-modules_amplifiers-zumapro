@@ -69,33 +69,6 @@ static ssize_t halo_heartbeat_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(halo_heartbeat);
 
-static ssize_t fw_mode_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	int ret = 0;
-	unsigned int mode;
-
-	mutex_lock(&cs40l26->lock);
-
-	if (cs40l26->fw_mode != CS40L26_FW_MODE_ROM
-			&& cs40l26->fw_mode != CS40L26_FW_MODE_RAM) {
-		dev_err(cs40l26->dev, "Invalid firmware mode: %u\n",
-				cs40l26->fw_mode);
-		ret = -EINVAL;
-	} else {
-		mode = cs40l26->fw_mode;
-	}
-
-	mutex_unlock(&cs40l26->lock);
-
-	if (ret)
-		return ret;
-
-	return snprintf(buf, PAGE_SIZE, "%u\n", mode);
-}
-static DEVICE_ATTR_RO(fw_mode);
-
 static ssize_t pm_stdby_timeout_ms_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -734,6 +707,49 @@ err_mutex:
 }
 static DEVICE_ATTR_RW(redc_comp_enable);
 
+static ssize_t swap_firmware_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	int ret;
+
+	mutex_lock(&cs40l26->lock);
+
+	if (cs40l26->fw.id == CS40L26_FW_ID)
+		ret = snprintf(buf, PAGE_SIZE, "%d\n", 0);
+	else if (cs40l26->fw.id == CS40L26_FW_CALIB_ID)
+		ret = snprintf(buf, PAGE_SIZE, "%d\n", 1);
+	else
+		ret = -EINVAL;
+
+	mutex_unlock(&cs40l26->lock);
+
+	return ret;
+}
+
+static ssize_t swap_firmware_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	int ret;
+	unsigned int variant;
+
+	ret = kstrtou32(buf, 10, &variant);
+	if (ret)
+		return ret;
+
+	if (variant == 0)
+		ret = cs40l26_fw_swap(cs40l26, CS40L26_FW_ID);
+	else if (variant == 1)
+		ret = cs40l26_fw_swap(cs40l26, CS40L26_FW_CALIB_ID);
+	else
+		ret = -EINVAL;
+
+	return ret ? ret : count;
+}
+static DEVICE_ATTR_RW(swap_firmware);
+
 static struct attribute *cs40l26_dev_attrs[] = {
 	&dev_attr_num_waves.attr,
 	&dev_attr_die_temp.attr,
@@ -741,7 +757,6 @@ static struct attribute *cs40l26_dev_attrs[] = {
 	&dev_attr_power_on_seq.attr,
 	&dev_attr_dsp_state.attr,
 	&dev_attr_halo_heartbeat.attr,
-	&dev_attr_fw_mode.attr,
 	&dev_attr_pm_stdby_timeout_ms.attr,
 	&dev_attr_pm_active_timeout_ms.attr,
 	&dev_attr_vibe_state.attr,
@@ -750,6 +765,7 @@ static struct attribute *cs40l26_dev_attrs[] = {
 	&dev_attr_delay_before_stop_playback_us.attr,
 	&dev_attr_f0_comp_enable.attr,
 	&dev_attr_redc_comp_enable.attr,
+	&dev_attr_swap_firmware.attr,
 	NULL,
 };
 
@@ -1837,50 +1853,7 @@ err_mutex:
 }
 static DEVICE_ATTR_RO(max_vmon);
 
-static ssize_t calib_fw_load_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	int ret;
-
-	mutex_lock(&cs40l26->lock);
-
-	if (cs40l26->fw.id == CS40L26_FW_ID)
-		ret = snprintf(buf, PAGE_SIZE, "%d\n", 0);
-	else if (cs40l26->fw.id == CS40L26_FW_CALIB_ID)
-		ret = snprintf(buf, PAGE_SIZE, "%d\n", 1);
-	else
-		ret = -EINVAL;
-
-	mutex_unlock(&cs40l26->lock);
-
-	return ret;
-}
-
-static ssize_t calib_fw_load_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	int ret;
-	unsigned int variant;
-
-	ret = kstrtou32(buf, 10, &variant);
-	if (ret)
-		return ret;
-
-	if (variant == 0)
-		ret = cs40l26_fw_swap(cs40l26, CS40L26_FW_ID);
-	else if (variant == 1)
-		ret = cs40l26_fw_swap(cs40l26, CS40L26_FW_CALIB_ID);
-	else
-		ret = -EINVAL;
-
-	return ret ? ret : count;
-}
-static DEVICE_ATTR_RW(calib_fw_load);
-
 static struct attribute *cs40l26_dev_attrs_cal[] = {
-	&dev_attr_calib_fw_load.attr,
 	&dev_attr_max_vbst.attr,
 	&dev_attr_max_bemf.attr,
 	&dev_attr_max_vmon.attr,
