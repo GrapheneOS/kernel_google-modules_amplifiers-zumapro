@@ -84,11 +84,11 @@ static int cs35l41_spi_probe(struct spi_device *spi)
 	return cs35l41_probe(cs35l41, pdata);
 }
 
-static void cs35l41_spi_remove(struct spi_device *spi)
+static int cs35l41_spi_remove(struct spi_device *spi)
 {
 	struct cs35l41_private *cs35l41 = spi_get_drvdata(spi);
 
-	cs35l41_remove(cs35l41);
+	return cs35l41_remove(cs35l41);
 }
 
 static const struct of_device_id cs35l41_of_match[] = {
