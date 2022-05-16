@@ -315,6 +315,76 @@ static int cs35l41_dsp_load_ev(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
+static int cs35l41_bp_current_limit_get(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+
+	ucontrol->value.integer.value[0] =
+		(long)(((cs35l41->pdata.bst_ipk - 1600) / 50) + 0x10);
+
+	return 0;
+}
+
+static int cs35l41_bp_current_limit_put(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+
+	cs35l41->pdata.bst_ipk =
+		((int)ucontrol->value.integer.value[0] - 0x10) * 50 + 1600;
+	dev_info(cs35l41->dev, "%s: value %d\n",
+				__func__, cs35l41->pdata.bst_ipk);
+
+	return 0;
+}
+
+static int cs35l41_hibernate_switch_get(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+
+	if (cs35l41->amp_hibernate == CS35L41_HIBERNATE_INCOMPATIBLE) {
+		ucontrol->value.integer.value[0] = false;
+	} else {
+		ucontrol->value.integer.value[0] = true;
+	}
+
+	return 0;
+}
+
+static int cs35l41_hibernate_switch_put(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+
+	if (ucontrol->value.integer.value[0]) {
+		cs35l41->amp_hibernate = CS35L41_HIBERNATE_NOT_LOADED;
+	} else {
+		cancel_delayed_work(&cs35l41->hb_work);
+		mutex_lock(&cs35l41->hb_lock);
+		cs35l41_exit_hibernate(cs35l41);
+		mutex_unlock(&cs35l41->hb_lock);
+		cs35l41->amp_hibernate = CS35L41_HIBERNATE_INCOMPATIBLE;
+	}
+	dev_info(cs35l41->dev, "%s: %ld\n",
+				__func__, ucontrol->value.integer.value[0]);
+
+	return 0;
+}
+
 static int cs35l41_halo_booted_get(struct snd_kcontrol *kcontrol,
 			   struct snd_ctl_elem_value *ucontrol)
 {
@@ -1619,7 +1689,8 @@ static const struct snd_kcontrol_new cs35l41_aud_controls[] = {
 	SOC_SINGLE_RANGE("ASPRX2 Slot Position", CS35L41_SP_FRAME_RX_SLOT, 8,
 			 0, 7, 0),
 	SOC_ENUM("PCM Soft Ramp", pcm_sft_ramp),
-	SOC_ENUM("Boost Peak Current Limit", current_limit),
+	SOC_ENUM_EXT("Boost Peak Current Limit", current_limit,
+		     cs35l41_bp_current_limit_get, cs35l41_bp_current_limit_put),
 	SOC_SINGLE_EXT("DSP Booted", SND_SOC_NOPM, 0, 1, 0,
 			cs35l41_halo_booted_get, cs35l41_halo_booted_put),
 	SOC_SINGLE_EXT("AMP Reset", SND_SOC_NOPM, 0, 1, 0,
@@ -1628,6 +1699,9 @@ static const struct snd_kcontrol_new cs35l41_aud_controls[] = {
 			cs35l41_ccm_reset_get, cs35l41_ccm_reset_put),
 	SOC_SINGLE_EXT("Force Interrupt", SND_SOC_NOPM, 0, 1, 0,
 			cs35l41_force_int_get, cs35l41_force_int_put),
+	SOC_SINGLE_EXT("Hibernate Switch", SND_SOC_NOPM, 0, 1, 0,
+			cs35l41_hibernate_switch_get,
+			cs35l41_hibernate_switch_put),
 	SOC_SINGLE_EXT("Hibernate Force Wake", SND_SOC_NOPM, 0, 1, 0,
 			cs35l41_hibernate_force_wake_get,
 			cs35l41_hibernate_force_wake_put),
