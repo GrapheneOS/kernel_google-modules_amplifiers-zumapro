@@ -92,6 +92,15 @@ int cl_dsp_memchunk_write(struct cl_dsp_memchunk *ch, int nbits, u32 val)
 }
 EXPORT_SYMBOL(cl_dsp_memchunk_write);
 
+int cl_dsp_memchunk_flush(struct cl_dsp_memchunk *ch)
+{
+	if (!ch->cachebits)
+		return 0;
+
+	return cl_dsp_memchunk_write(ch, 24 - ch->cachebits, 0);
+}
+EXPORT_SYMBOL(cl_dsp_memchunk_flush);
+
 int cl_dsp_raw_write(struct cl_dsp *dsp, unsigned int reg,
 		const void *val, size_t val_len, size_t limit)
 {
@@ -120,8 +129,11 @@ int cl_dsp_get_reg(struct cl_dsp *dsp, const char *coeff_name,
 	struct cl_dsp_coeff_desc *coeff_desc;
 	unsigned int mem_region_prefix;
 
-	if  (!dsp)
+	if (!dsp)
 		return -EPERM;
+
+	if (list_empty(&dsp->coeff_desc_head))
+		return -ENOENT;
 
 	list_for_each_entry(coeff_desc, &dsp->coeff_desc_head, list) {
 		if (strncmp(coeff_desc->name, coeff_name,
@@ -211,7 +223,12 @@ static int cl_dsp_owt_init(struct cl_dsp *dsp, const struct firmware *bin)
 		return -EPERM;
 	}
 
-	memcpy(&dsp->wt_desc->owt.raw_data, &bin->data[0], bin->size);
+	dsp->wt_desc->owt.raw_data = devm_kzalloc(dsp->dev, bin->size,
+			GFP_KERNEL);
+	if (!dsp->wt_desc->owt.raw_data)
+		return -ENOMEM;
+
+	memcpy(dsp->wt_desc->owt.raw_data, &bin->data[0], bin->size);
 
 	return 0;
 }
@@ -219,7 +236,7 @@ static int cl_dsp_owt_init(struct cl_dsp *dsp, const struct firmware *bin)
 static int cl_dsp_read_wt(struct cl_dsp *dsp, int pos, int size)
 {
 	struct cl_dsp_owt_header *entry = dsp->wt_desc->owt.waves;
-	void *buf = (void *)&dsp->wt_desc->owt.raw_data[pos];
+	void *buf = (void *)(dsp->wt_desc->owt.raw_data + pos);
 	struct cl_dsp_memchunk ch = cl_dsp_memchunk_create(buf, size);
 	u32 *wbuf = buf, *max = buf;
 	int i;
@@ -230,8 +247,8 @@ static int cl_dsp_read_wt(struct cl_dsp *dsp, int pos, int size)
 
 		if (entry->type == WT_TYPE_TERMINATOR) {
 			dsp->wt_desc->owt.nwaves = i;
-			dsp->wt_desc->owt.bytes = max((long)ch.bytes,
-					(void *)max - buf);
+			dsp->wt_desc->owt.bytes = max(ch.bytes,
+					(u32)((void *)max - buf));
 
 			return dsp->wt_desc->owt.bytes;
 		}
@@ -248,6 +265,7 @@ static int cl_dsp_read_wt(struct cl_dsp *dsp, int pos, int size)
 		}
 	}
 
+	dev_err(dsp->dev, "Maximum number of wavetable entries exceeded\n");
 	return -E2BIG;
 }
 
@@ -266,15 +284,9 @@ static int cl_dsp_coeff_header_parse(struct cl_dsp *dsp,
 		return -EINVAL;
 	}
 
-	if (CL_DSP_GET_MAJOR(header.fw_revision)
-			!= CL_DSP_GET_MAJOR(dsp->algo_info[0].rev)) {
-		dev_err(dev,
-			"Coeff. revision 0x%06X incompatible with 0x%06X\n",
-			header.fw_revision, dsp->algo_info[0].rev);
-		return -EINVAL;
-	} else if (header.fw_revision != dsp->algo_info[0].rev) {
+	if (header.fw_revision != dsp->algo_info[0].rev) {
 		dev_warn(dev,
-			"Coeff. rev. 0x%06X mistmatches 0x%06X, continuing..\n",
+			"Coeff. rev. 0x%06X mismatches 0x%06X, continuing..\n",
 			header.fw_revision, dsp->algo_info[0].rev);
 	}
 
@@ -320,17 +332,20 @@ static void cl_dsp_coeff_handle_info_text(struct cl_dsp *dsp, const u8 *data,
 int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 {
 	unsigned int pos = CL_DSP_COEFF_FILE_HEADER_SIZE;
-	struct device *dev = dsp->dev;
 	bool wt_found = false;
 	int ret = -EINVAL;
 	struct cl_dsp_coeff_data_block data_block;
 	union cl_dsp_wmdr_header wmdr_header;
 	char wt_date[CL_DSP_WMDR_DATE_LEN];
 	unsigned int reg, wt_reg, algo_rev;
+	u16 algo_id, parent_id;
+	struct device *dev;
 	int i;
 
-	if  (!dsp)
+	if (!dsp)
 		return -EPERM;
+
+	dev = dsp->dev;
 
 	*wt_date = '\0';
 
@@ -358,11 +373,13 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 		memcpy(data_block.payload, &fw->data[pos],
 				data_block.header.data_len);
 
+		algo_id = data_block.header.algo_id & 0xFFFF;
+
 		if (data_block.header.block_type != CL_DSP_WMDR_NAME_TYPE &&
 			data_block.header.block_type != CL_DSP_WMDR_INFO_TYPE) {
 			for (i = 0; i < dsp->num_algos; i++) {
-				if (data_block.header.algo_id
-						== dsp->algo_info[i].id)
+				parent_id = dsp->algo_info[i].id & 0xFFFF;
+				if (algo_id == parent_id)
 					break;
 			}
 
@@ -373,8 +390,9 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 				goto err_free;
 			}
 
-			algo_rev =
-				CL_DSP_SHIFT_REV(data_block.header.algo_rev);
+			algo_rev = data_block.header.algo_rev >>
+					CL_DSP_REV_OFFSET_SHIFT;
+
 			if (CL_DSP_GET_MAJOR(algo_rev) !=
 				CL_DSP_GET_MAJOR(dsp->algo_info[i].rev)) {
 				dev_err(dev,
@@ -388,8 +406,7 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 				goto err_free;
 			}
 
-			wt_found = ((data_block.header.algo_id & 0xFFFF) ==
-					(dsp->wt_desc->id & 0xFFFF));
+			wt_found = (algo_id == (dsp->wt_desc->id & 0xFFFF));
 		}
 
 		switch (data_block.header.block_type) {
@@ -532,10 +549,10 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 
 	if (wt_found) {
 		if (*wt_date != '\0')
-			strlcpy(dsp->wt_desc->wt_date, wt_date,
+			strscpy(dsp->wt_desc->wt_date, wt_date,
 					CL_DSP_WMDR_DATE_LEN);
 		else
-			strlcpy(dsp->wt_desc->wt_date,
+			strscpy(dsp->wt_desc->wt_date,
 					CL_DSP_WMDR_FILE_DATE_MISSING,
 					CL_DSP_WMDR_DATE_LEN);
 	}
@@ -732,15 +749,18 @@ EXPORT_SYMBOL(cl_dsp_fw_rev_get);
 
 static int cl_dsp_coeff_init(struct cl_dsp *dsp)
 {
-	struct regmap *regmap = dsp->regmap;
-	struct device *dev = dsp->dev;
-	struct cl_dsp_coeff_desc *coeff_desc;
 	unsigned int reg = CL_DSP_HALO_XM_FW_ID_REG;
+	struct cl_dsp_coeff_desc *coeff_desc;
+	struct regmap *regmap;
+	struct device *dev;
 	unsigned int val;
 	int ret, i;
 
-	if  (!dsp)
+	if (!dsp)
 		return -EPERM;
+
+	dev = dsp->dev;
+	regmap = dsp->regmap;
 
 	ret = regmap_read(regmap, CL_DSP_HALO_NUM_ALGOS_REG, &val);
 	if (ret) {
@@ -877,14 +897,13 @@ static void cl_dsp_coeff_free(struct cl_dsp *dsp)
 {
 	struct cl_dsp_coeff_desc *coeff_desc;
 
-	if  (!dsp)
+	if (!dsp)
 		return;
 
 	while (!list_empty(&dsp->coeff_desc_head)) {
 		coeff_desc = list_first_entry(&dsp->coeff_desc_head,
 				struct cl_dsp_coeff_desc, list);
 		list_del(&coeff_desc->list);
-		kfree(coeff_desc->parent_name);
 		devm_kfree(dsp->dev, coeff_desc);
 	}
 }
@@ -948,14 +967,16 @@ static void cl_dsp_handle_info_text(struct cl_dsp *dsp,
 int cl_dsp_firmware_parse(struct cl_dsp *dsp, const struct firmware *fw,
 		bool write_fw)
 {
-	struct device *dev = dsp->dev;
 	unsigned int pos = CL_DSP_FW_FILE_HEADER_SIZE, reg = 0;
 	struct cl_dsp_data_block data_block;
 	union cl_dsp_wmfw_header wmfw_header;
+	struct device *dev;
 	int ret;
 
 	if (!dsp)
 		return -EPERM;
+
+	dev = dsp->dev;
 
 	memcpy(wmfw_header.data, fw->data, CL_DSP_FW_FILE_HEADER_SIZE);
 

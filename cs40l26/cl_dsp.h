@@ -67,8 +67,7 @@
 
 #define CL_DSP_ALGO_LIST_TERM		0xBEDEAD
 
-#define CL_DSP_REV_OFFSET_MASK		GENMASK(23, 16)
-#define CL_DSP_REV_OFFSET_SHIFT	8
+#define CL_DSP_REV_OFFSET_SHIFT		8
 
 #define CL_DSP_REV_MAJOR_MASK		GENMASK(23, 16)
 #define CL_DSP_REV_MAJOR_SHIFT		16
@@ -137,18 +136,13 @@
 #define CL_DSP_ALGO_ENTRY_SIZE			24
 
 /* open wavetable */
-#define CL_DSP_OWT_HEADER_MAX_LEN		128
+#define CL_DSP_OWT_HEADER_MAX_LEN		254
 #define CL_DSP_OWT_HEADER_ENTRY_SIZE		12
-
-#define CL_DSP_MAX_BIN_SIZE			9584
 
 /* macros */
 #define CL_DSP_WORD_ALIGN(n)	(CL_DSP_BYTES_PER_WORD +\
 				(((n) / CL_DSP_BYTES_PER_WORD) *\
 				CL_DSP_BYTES_PER_WORD))
-
-#define CL_DSP_SHIFT_REV(n)	(((n) >> CL_DSP_REV_OFFSET_SHIFT) &\
-				CL_DSP_REV_OFFSET_MASK)
 
 #define CL_DSP_GET_MAJOR(n)	(((n) & CL_DSP_REV_MAJOR_MASK) >>\
 				CL_DSP_REV_MAJOR_SHIFT)
@@ -268,7 +262,7 @@ struct cl_dsp_owt_desc {
 	struct cl_dsp_owt_header waves[CL_DSP_OWT_HEADER_MAX_LEN];
 	int nwaves;
 	u32 bytes;
-	u8 raw_data[CL_DSP_MAX_BIN_SIZE];
+	u8 *raw_data;
 };
 
 struct cl_dsp_wt_desc {
@@ -318,6 +312,7 @@ int cl_dsp_get_reg(struct cl_dsp *dsp, const char *coeff_name,
 struct cl_dsp_memchunk cl_dsp_memchunk_create(void *data, int size);
 int cl_dsp_memchunk_write(struct cl_dsp_memchunk *ch, int nbits, u32 val);
 int cl_dsp_memchunk_read(struct cl_dsp_memchunk *ch, int nbits);
+int cl_dsp_memchunk_flush(struct cl_dsp_memchunk *ch);
 int cl_dsp_raw_write(struct cl_dsp *dsp, unsigned int reg,
 		const void *val, size_t val_len, size_t limit);
 int cl_dsp_fw_id_get(struct cl_dsp *dsp, unsigned int *id);

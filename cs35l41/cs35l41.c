@@ -46,7 +46,7 @@
 
 #include "wm_adsp.h"
 #include "cs35l41.h"
-#include <sound/cs35l41.h>
+#include "sound/cs35l41-private.h"
 #if IS_ENABLED(CONFIG_SND_SOC_CODEC_DETECT)
 #include <linux/codec-misc.h>
 struct cs35l41_misc_priv_type {
@@ -311,6 +311,76 @@ static int cs35l41_dsp_load_ev(struct snd_soc_dapm_widget *w,
 	default:
 		break;
 	}
+
+	return 0;
+}
+
+static int cs35l41_bp_current_limit_get(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+
+	ucontrol->value.integer.value[0] =
+		(long)(((cs35l41->pdata.bst_ipk - 1600) / 50) + 0x10);
+
+	return 0;
+}
+
+static int cs35l41_bp_current_limit_put(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+
+	cs35l41->pdata.bst_ipk =
+		((int)ucontrol->value.integer.value[0] - 0x10) * 50 + 1600;
+	dev_info(cs35l41->dev, "%s: value %d\n",
+				__func__, cs35l41->pdata.bst_ipk);
+
+	return 0;
+}
+
+static int cs35l41_hibernate_switch_get(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+
+	if (cs35l41->amp_hibernate == CS35L41_HIBERNATE_INCOMPATIBLE) {
+		ucontrol->value.integer.value[0] = false;
+	} else {
+		ucontrol->value.integer.value[0] = true;
+	}
+
+	return 0;
+}
+
+static int cs35l41_hibernate_switch_put(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+
+	if (ucontrol->value.integer.value[0]) {
+		cs35l41->amp_hibernate = CS35L41_HIBERNATE_NOT_LOADED;
+	} else {
+		cancel_delayed_work(&cs35l41->hb_work);
+		mutex_lock(&cs35l41->hb_lock);
+		cs35l41_exit_hibernate(cs35l41);
+		mutex_unlock(&cs35l41->hb_lock);
+		cs35l41->amp_hibernate = CS35L41_HIBERNATE_INCOMPATIBLE;
+	}
+	dev_info(cs35l41->dev, "%s: %ld\n",
+				__func__, ucontrol->value.integer.value[0]);
 
 	return 0;
 }
@@ -1502,6 +1572,45 @@ static int cs35l41_put_ramp_knee_time(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+static int cs35l41_default_96k_get(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component;
+	struct cs35l41_private *cs35l41;
+
+	component = snd_soc_kcontrol_component(kcontrol);
+	cs35l41 = snd_soc_component_get_drvdata(component);
+
+	ucontrol->value.integer.value[0] =
+		(cs35l41->reset_cache.fs_cfg == CS35L41_FS_96K);
+	return 0;
+}
+
+static int cs35l41_default_96k_put(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component;
+	struct cs35l41_private *cs35l41;
+
+	component = snd_soc_kcontrol_component(kcontrol);
+	cs35l41 = snd_soc_component_get_drvdata(component);
+
+	if (ucontrol->value.integer.value[0] < 0 ||
+	    ucontrol->value.integer.value[0] > 1)
+		return -EINVAL;
+
+	cs35l41->reset_cache.fs_cfg =
+		ucontrol->value.integer.value[0] == 1 ?
+		CS35L41_FS_96K : CS35L41_FS_48K;
+
+	regmap_update_bits(cs35l41->regmap, CS35L41_GLOBAL_CLK_CTRL,
+		CS35L41_GLOBAL_FS_MASK,
+		cs35l41->reset_cache.fs_cfg << CS35L41_GLOBAL_FS_SHIFT);
+
+	pr_info("update global fs to %d\n", cs35l41->reset_cache.fs_cfg);
+	return 0;
+}
+
 static const char * const cs35l41_output_dev_text[] = {
 	"Speaker",
 	"Receiver",
@@ -1580,7 +1689,8 @@ static const struct snd_kcontrol_new cs35l41_aud_controls[] = {
 	SOC_SINGLE_RANGE("ASPRX2 Slot Position", CS35L41_SP_FRAME_RX_SLOT, 8,
 			 0, 7, 0),
 	SOC_ENUM("PCM Soft Ramp", pcm_sft_ramp),
-	SOC_ENUM("Boost Peak Current Limit", current_limit),
+	SOC_ENUM_EXT("Boost Peak Current Limit", current_limit,
+		     cs35l41_bp_current_limit_get, cs35l41_bp_current_limit_put),
 	SOC_SINGLE_EXT("DSP Booted", SND_SOC_NOPM, 0, 1, 0,
 			cs35l41_halo_booted_get, cs35l41_halo_booted_put),
 	SOC_SINGLE_EXT("AMP Reset", SND_SOC_NOPM, 0, 1, 0,
@@ -1589,6 +1699,9 @@ static const struct snd_kcontrol_new cs35l41_aud_controls[] = {
 			cs35l41_ccm_reset_get, cs35l41_ccm_reset_put),
 	SOC_SINGLE_EXT("Force Interrupt", SND_SOC_NOPM, 0, 1, 0,
 			cs35l41_force_int_get, cs35l41_force_int_put),
+	SOC_SINGLE_EXT("Hibernate Switch", SND_SOC_NOPM, 0, 1, 0,
+			cs35l41_hibernate_switch_get,
+			cs35l41_hibernate_switch_put),
 	SOC_SINGLE_EXT("Hibernate Force Wake", SND_SOC_NOPM, 0, 1, 0,
 			cs35l41_hibernate_force_wake_get,
 			cs35l41_hibernate_force_wake_put),
@@ -1632,6 +1745,8 @@ static const struct snd_kcontrol_new cs35l41_aud_controls[] = {
 	SOC_SINGLE_EXT("IMP", SND_SOC_NOPM, 0, 0xFFFFFFFF, 0,
 			cs35l41_imp_get, cs35l41_imp_put),
 #endif
+	SOC_SINGLE_EXT("Default 96K", SND_SOC_NOPM, 0, 1, 0,
+			cs35l41_default_96k_get, cs35l41_default_96k_put),
 };
 
 static const struct cs35l41_otp_map_element_t *cs35l41_find_otp_map(u32 otp_id)
@@ -2091,7 +2206,20 @@ static int cs35l41_main_amp_event(struct snd_soc_dapm_widget *w,
 	return ret;
 }
 
-static int cs35l41_asprx_event(struct snd_soc_dapm_widget *w,
+static void cs35l41_mute_amp(struct cs35l41_private *cs35l41)
+{
+	bool mute = !(cs35l41->asprx1_enabled || cs35l41->asprx2_enabled);
+
+	if (mute) {
+		regmap_update_bits(cs35l41->regmap, CS35L41_AMP_OUT_MUTE,
+				CS35L41_AMP_MUTE_MASK, CS35L41_AMP_MUTE_MASK);
+	} else {
+		regmap_update_bits(cs35l41->regmap, CS35L41_AMP_OUT_MUTE,
+				CS35L41_AMP_MUTE_MASK, 0);
+	}
+}
+
+static int cs35l41_asprx1_event(struct snd_soc_dapm_widget *w,
 		struct snd_kcontrol *kcontrol, int event)
 {
 	struct snd_soc_component *component =
@@ -2102,18 +2230,44 @@ static int cs35l41_asprx_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		regmap_update_bits(cs35l41->regmap, CS35L41_AMP_OUT_MUTE,
-				CS35L41_AMP_MUTE_MASK, 0);
+		cs35l41->asprx1_enabled = true;
 		break;
 	case SND_SOC_DAPM_PRE_PMD:
-		regmap_update_bits(cs35l41->regmap, CS35L41_AMP_OUT_MUTE,
-				CS35L41_AMP_MUTE_MASK, CS35L41_AMP_MUTE_MASK);
+		cs35l41->asprx1_enabled = false;
 		break;
 	default:
 		dev_err(cs35l41->dev, "Invalid event = 0x%x\n", event);
 		ret = -EINVAL;
 		break;
 	}
+	if (ret == 0)
+		cs35l41_mute_amp(cs35l41);
+	return ret;
+}
+
+static int cs35l41_asprx2_event(struct snd_soc_dapm_widget *w,
+		struct snd_kcontrol *kcontrol, int event)
+{
+	struct snd_soc_component *component =
+		snd_soc_dapm_to_component(w->dapm);
+	struct cs35l41_private *cs35l41 =
+		snd_soc_component_get_drvdata(component);
+	int ret = 0;
+
+	switch (event) {
+	case SND_SOC_DAPM_POST_PMU:
+		cs35l41->asprx2_enabled = true;
+		break;
+	case SND_SOC_DAPM_PRE_PMD:
+		cs35l41->asprx2_enabled = false;
+		break;
+	default:
+		dev_err(cs35l41->dev, "Invalid event = 0x%x\n", event);
+		ret = -EINVAL;
+		break;
+	}
+	if (ret == 0)
+		cs35l41_mute_amp(cs35l41);
 	return ret;
 }
 
@@ -2127,10 +2281,10 @@ static const struct snd_soc_dapm_widget cs35l41_dapm_widgets[] = {
 				cs35l41_dsp_load_ev, SND_SOC_DAPM_POST_PMU),
 	SND_SOC_DAPM_OUTPUT("SPK"),
 	SND_SOC_DAPM_AIF_IN_E("ASPRX1", NULL, 0, CS35L41_SP_ENABLES, 16, 0,
-				cs35l41_asprx_event,
+				cs35l41_asprx1_event,
 				SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
 	SND_SOC_DAPM_AIF_IN_E("ASPRX2", NULL, 0, CS35L41_SP_ENABLES, 17, 0,
-				cs35l41_asprx_event,
+				cs35l41_asprx2_event,
 				SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
 	SND_SOC_DAPM_AIF_OUT("ASPTX1", NULL, 0, CS35L41_SP_ENABLES, 0, 0),
 	SND_SOC_DAPM_AIF_OUT("ASPTX2", NULL, 0, CS35L41_SP_ENABLES, 1, 0),
@@ -2564,18 +2718,18 @@ static int cs35l41_dai_set_sysclk(struct snd_soc_dai *dai,
 	unsigned int fs2_val;
 	unsigned int val;
 
-	fsIndex = cs35l41_get_fs_mon_config_index(freq);
-	if (fsIndex < 0) {
-		dev_err(cs35l41->dev, "Invalid CLK Config freq: %u\n", freq);
-		return -EINVAL;
-	}
-
 	/* Need the SCLK Frequency regardless of sysclk source */
 	cs35l41->sclk = freq;
 
 	dev_dbg(cs35l41->dev, "Set DAI sysclk %d\n", freq);
 	if (cs35l41->sclk <= 6144000) {
 		/* Use the lookup table */
+		fsIndex = cs35l41_get_fs_mon_config_index(freq);
+		if (fsIndex < 0) {
+			dev_err(cs35l41->dev, "Invalid CLK Config freq: %u\n", freq);
+			return -EINVAL;
+		}
+
 		fs1_val = cs35l41_fs_mon[fsIndex].fs1;
 		fs2_val = cs35l41_fs_mon[fsIndex].fs2;
 	} else {
@@ -2852,13 +3006,26 @@ static int cs35l41_set_pdata(struct cs35l41_private *cs35l41)
 	return 0;
 }
 
+static const char * const dapm_names[] = { "SPK", "VP", "VBST", "ISENSE",
+	"VSENSE", "TEMP", "AMP Playback", "AMP Capture" };
+
+static void cs35l41_component_ignore_suspend(struct snd_soc_component *component)
+{
+	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(dapm_names); i++) {
+		pr_debug("snd_soc_dapm_ignore_suspend dapm name[%s]", dapm_names[i]);
+		snd_soc_dapm_ignore_suspend(dapm, dapm_names[i]);
+	}
+	snd_soc_dapm_sync(dapm);
+}
+
 static int cs35l41_component_probe(struct snd_soc_component *component)
 {
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
 	struct snd_kcontrol_new *kcontrol;
-	struct snd_soc_dapm_context *dapm =
-			snd_soc_component_get_dapm(component);
 	int ret = 0;
 
 	component->regmap = cs35l41->regmap;
@@ -2890,26 +3057,8 @@ static int cs35l41_component_probe(struct snd_soc_component *component)
 			       "snd_soc_add_codec_controls failed (%d)\n", ret);
 		kfree(kcontrol);
 	}
-	if (component->name_prefix && !strcmp(component->name_prefix, "R")) {
-		snd_soc_dapm_ignore_suspend(dapm, "R SPK");
-		snd_soc_dapm_ignore_suspend(dapm, "R VP");
-		snd_soc_dapm_ignore_suspend(dapm, "R VBST");
-		snd_soc_dapm_ignore_suspend(dapm, "R ISENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "R VSENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "R TEMP");
-		snd_soc_dapm_ignore_suspend(dapm, "R AMP Playback");
-		snd_soc_dapm_ignore_suspend(dapm, "R AMP Capture");
-	} else {
-		snd_soc_dapm_ignore_suspend(dapm, "AMP Playback");
-		snd_soc_dapm_ignore_suspend(dapm, "VBST");
-		snd_soc_dapm_ignore_suspend(dapm, "SPK");
-		snd_soc_dapm_ignore_suspend(dapm, "VP");
-		snd_soc_dapm_ignore_suspend(dapm, "ISENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "VSENSE");
-		snd_soc_dapm_ignore_suspend(dapm, "TEMP");
-		snd_soc_dapm_ignore_suspend(dapm, "AMP Capture");
-	}
-	snd_soc_dapm_sync(dapm);
+
+	cs35l41_component_ignore_suspend(component);
 exit:
 	return ret;
 }
