@@ -6,7 +6,7 @@
 # unless you have coordinated with the team managing the Soong to Bazel
 # migration.
 
-load("//build/kleaf:kernel.bzl", "kernel_module")
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
 
 kernel_module(
     name = "cs35l41.slider",
@@ -16,8 +16,8 @@ kernel_module(
         "snd-soc-cs35l41-spi.ko",
         "snd-soc-wm-adsp.ko",
     ],
-    kernel_build = "//private/gs-google:slider",
+    kernel_build = "//gs/google-modules/soc-modules:slider",
     visibility = [
-        "//private/gs-google:__pkg__",
+        "//gs/google-modules/soc-modules:__pkg__",
     ],
 )
