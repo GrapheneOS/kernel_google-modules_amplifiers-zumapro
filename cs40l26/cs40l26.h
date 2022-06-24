@@ -858,9 +858,9 @@
 #define CS40L26_FW_CALIB_ID		0x1800DA
 #define CS40L26_FW_CALIB_MIN_REV	0x010014
 #define CS40L26_FW_CALIB_BRANCH		0x01
-#define CS40L26_FW_MAINT_MIN_REV	0x27021A
+#define CS40L26_FW_MAINT_MIN_REV	0x270216
 #define CS40L26_FW_MAINT_BRANCH		0x27
-#define CS40L26_FW_MAINT_CALIB_MIN_REV	0x210112
+#define CS40L26_FW_MAINT_CALIB_MIN_REV	0x21010D
 #define CS40L26_FW_MAINT_CALIB_BRANCH	0x21
 #define CS40L26_FW_BRANCH_MASK		GENMASK(23, 21)
 
@@ -926,6 +926,9 @@
 #define CS40L26_AMP_CTRL_VOL_PCM_SHIFT		3
 
 #define CS40L26_AMP_VOL_PCM_MAX		0x07FF
+
+#define CS40L26_ERASE_BUFFER_MS		500
+#define CS40L26_MAX_WAIT_VIBE_COMPLETE_MS	10000
 
 /* GPI Triggering */
 #define CS40L26_GPIO1			1
@@ -1513,6 +1516,7 @@ struct cs40l26_private {
 	bool comp_enable_redc;
 	bool comp_enable_f0;
 	struct completion i2s_cont;
+	struct completion erase_cont;
 	u8 vpbr_thld;
 };
 
