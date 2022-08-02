@@ -322,9 +322,11 @@ static int cs35l41_bp_current_limit_get(struct snd_kcontrol *kcontrol,
 		snd_soc_kcontrol_component(kcontrol);
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
+	struct soc_enum *soc_enum = (struct soc_enum *)kcontrol->private_value;
+	int value = 0;
 
-	ucontrol->value.integer.value[0] =
-		(long)(((cs35l41->pdata.bst_ipk - 1600) / 50) + 0x10);
+	regmap_read(cs35l41->regmap, soc_enum->reg, (int *)&value);
+	ucontrol->value.integer.value[0] = (long)(value & CS35L41_BST_IPK_MASK);
 
 	return 0;
 }
@@ -336,11 +338,22 @@ static int cs35l41_bp_current_limit_put(struct snd_kcontrol *kcontrol,
 		snd_soc_kcontrol_component(kcontrol);
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
+	int ret = 0;
 
 	cs35l41->pdata.bst_ipk =
 		((int)ucontrol->value.integer.value[0] - 0x10) * 50 + 1600;
-	dev_info(cs35l41->dev, "%s: value %d\n",
+
+	ret = regmap_update_bits(cs35l41->regmap, CS35L41_BSTCVRT_PEAK_CUR,
+			CS35L41_BST_IPK_MASK,
+			((int)ucontrol->value.integer.value[0] << CS35L41_BST_IPK_SHIFT));
+
+	if (ret) {
+		dev_err(cs35l41->dev, "Failed to write peak current limit\n");
+		return ret;
+	} else {
+		dev_info(cs35l41->dev, "%s: value %d\n",
 				__func__, cs35l41->pdata.bst_ipk);
+	}
 
 	return 0;
 }
