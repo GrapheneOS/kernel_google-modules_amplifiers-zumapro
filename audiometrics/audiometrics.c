@@ -70,6 +70,9 @@ struct audio_sz_type {
 	uint32_t mic_broken_degrade;
 	uint32_t ams_count;
 	uint32_t cs_count;
+	uint32_t cca_active;
+	uint32_t cca_enable;
+	uint32_t cca_cs;
 };
 
 struct audiometrics_priv_type {
@@ -400,6 +403,67 @@ static ssize_t ams_rate_read_once_show(struct device *dev,
 	return counts;
 }
 
+static ssize_t cca_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv;
+	int counts;
+
+	if (IS_ERR_OR_NULL(dev))
+		return -ENODEV;
+
+	priv = dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(priv))
+		return -ENODEV;
+
+	mutex_lock(&priv->lock);
+	counts = scnprintf(buf, PAGE_SIZE, "%u,%u,%u", priv->sz.cca_active,
+		priv->sz.cca_enable, priv->sz.cca_cs);
+	mutex_unlock(&priv->lock);
+
+	return counts;
+}
+
+static ssize_t cca_rate_read_once_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv;
+	int counts;
+	uint rate_active = 0, rate_enable = 0;
+	const int scale = 100;
+
+
+	if (IS_ERR_OR_NULL(dev))
+		return -ENODEV;
+
+	priv = dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(priv))
+		return -ENODEV;
+
+	mutex_lock(&priv->lock);
+
+	if (priv->sz.cca_cs) {
+		rate_active = (priv->sz.cca_active * scale / priv->sz.cca_cs);
+		rate_enable = (priv->sz.cca_enable * scale / priv->sz.cca_cs);
+	}
+
+	if (rate_active > scale) {
+		rate_active = scale;
+		rate_enable = scale;
+	}
+
+	counts = scnprintf(buf, PAGE_SIZE, "%u,%u", rate_active, rate_enable);
+
+	priv->sz.cca_active = 0;
+	priv->sz.cca_enable = 0;
+	priv->sz.cca_cs = 0;
+
+	mutex_unlock(&priv->lock);
+	return counts;
+}
+
 static int amcs_cdev_open(struct inode *inode, struct file *file)
 {
 	struct audiometrics_priv_type *priv = container_of(inode->i_cdev,
@@ -550,6 +614,36 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			ret = 0;
 		break;
 
+		case AMCS_OP_CCA:
+			mutex_lock(&priv->lock);
+			if (params.val[0] == AMCS_OP2_GET) {
+				params.val[1] =	priv->sz.cca_active;
+				params.val[2] =	priv->sz.cca_enable;
+				params.val[3] =	priv->sz.cca_cs;
+			} else if (params.val[0] == AMCS_OP2_SET) {
+				priv->sz.cca_active = params.val[1];
+				priv->sz.cca_enable = params.val[2];
+				priv->sz.cca_cs = params.val[3];
+			}
+			mutex_unlock(&priv->lock);
+
+			if (!copy_to_user((struct amcs_params *)arg, &params, _IOC_SIZE(cmd)))
+				ret = 0;
+			else
+				ret = -EINVAL;
+		break;
+
+		case AMCS_OP_CCA_INCREASE:
+			mutex_lock(&priv->lock);
+			if (params.val[0] == AMCS_OP2_SET) {
+				priv->sz.cca_active += params.val[1];
+				priv->sz.cca_enable += params.val[2];
+				priv->sz.cca_cs += params.val[3];
+			}
+			mutex_unlock(&priv->lock);
+			ret = 0;
+		break;
+
 		default:
 			dev_warn(priv->device, "%s, unsupported op = %d\n", __func__, params.op);
 			ret = -EINVAL;
@@ -611,6 +705,8 @@ static DEVICE_ATTR_RO(mic_broken_degrade);
 static DEVICE_ATTR_RO(codec_crashed_counter);
 static DEVICE_ATTR_RO(ams_cs);
 static DEVICE_ATTR_RO(ams_rate_read_once);
+static DEVICE_ATTR_RO(cca);
+static DEVICE_ATTR_RO(cca_rate_read_once);
 
 
 static struct attribute *audiometrics_fs_attrs[] = {
@@ -626,6 +722,8 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_codec_crashed_counter.attr,
 	&dev_attr_ams_cs.attr,
 	&dev_attr_ams_rate_read_once.attr,
+	&dev_attr_cca.attr,
+	&dev_attr_cca_rate_read_once.attr,
 	NULL,
 };
 
