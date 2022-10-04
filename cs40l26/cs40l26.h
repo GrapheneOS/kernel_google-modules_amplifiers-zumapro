@@ -3,7 +3,7 @@
  * cs40l26.h -- CS40L26 Boosted Haptic Driver with Integrated DSP and
  * Waveform Memory with Advanced Closed Loop Algorithms and LRA protection
  *
- * Copyright 2021 Cirrus Logic, Inc.
+ * Copyright 2022 Cirrus Logic, Inc.
  *
  * Author: Fred Treven <fred.treven@cirrus.com>
  */
@@ -703,7 +703,7 @@
 #define CS40L26_MAILBOX_ALGO_ID	0x0001F203
 #define CS40L26_MDSYNC_ALGO_ID		0x0001F20F
 #define CS40L26_PM_ALGO_ID		0x0001F206
-#define CS40l26_SVC_ALGO_ID		0x0001F207
+#define CS40L26_SVC_ALGO_ID		0x0001F207
 #define CS40L26_VIBEGEN_ALGO_ID	0x000100BD
 #define CS40L26_LOGGER_ALGO_ID		0x0004013D
 #define CS40L26_EXT_ALGO_ID		0x0004013C
@@ -837,7 +837,7 @@
 #define CS40L26_FW_CALIB_NAME		"cs40l26-calib.wmfw"
 
 #define CS40L26_TUNING_FILES_RUNTIME	4
-#define CS40L26_TUNING_FILES_CAL	2
+#define CS40L26_TUNING_FILES_CAL	3
 
 #define CS40L26_WT_FILE_NAME			"cs40l26.bin"
 #define CS40L26_WT_FILE_PREFIX			"cs40l26-wt"
@@ -1170,9 +1170,6 @@
 #define CS40L26_A2H_VOLUME_MAX		0x7FFFFF
 
 #define CS40L26_A2H_DELAY_MAX		0x190
-
-#define CS40L26_PDATA_PRESENT		0x80000000
-#define CS40L26_PDATA_MASK			~CS40L26_PDATA_PRESENT
 
 #define CS40L26_VMON_DEC_OUT_DATA_MASK	GENMASK(23, 0)
 #define CS40L26_VMON_OVFL_FLAG_MASK	BIT(31)
@@ -1522,6 +1519,7 @@ struct cs40l26_private {
 	struct completion i2s_cont;
 	struct completion erase_cont;
 	u8 vpbr_thld;
+	unsigned int svc_le_est_stored;
 };
 
 struct cs40l26_codec {
@@ -1555,7 +1553,7 @@ int cs40l26_dbc_set(struct cs40l26_private *cs40l26, enum cs40l26_dbc dbc,
 		u32 val);
 int cs40l26_asp_start(struct cs40l26_private *cs40l26);
 int cs40l26_get_num_waves(struct cs40l26_private *cs40l26, u32 *num_waves);
-int cs40l26_fw_swap(struct cs40l26_private *cs40l26, u32 id);
+int cs40l26_fw_swap(struct cs40l26_private *cs40l26, const u32 id);
 void cs40l26_vibe_state_update(struct cs40l26_private *cs40l26,
 		enum cs40l26_vibe_state_event event);
 int cs40l26_pm_stdby_timeout_ms_get(struct cs40l26_private *cs40l26,
@@ -1570,6 +1568,8 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26,
 		enum cs40l26_pm_state state);
 int cs40l26_ack_write(struct cs40l26_private *cs40l26, u32 reg, u32 write_val,
 		u32 reset_val);
+int cs40l26_pm_enter(struct device *dev);
+void cs40l26_pm_exit(struct device *dev);
 void cs40l26_resume_error_handle(struct device *dev, int ret);
 int cs40l26_resume(struct device *dev);
 int cs40l26_sys_resume(struct device *dev);
