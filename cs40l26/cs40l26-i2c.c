@@ -58,11 +58,11 @@ static int cs40l26_i2c_probe(struct i2c_client *client,
 #endif
 }
 
-static int cs40l26_i2c_remove(struct i2c_client *client)
+static void cs40l26_i2c_remove(struct i2c_client *client)
 {
 	struct cs40l26_private *cs40l26 = i2c_get_clientdata(client);
 
-	return cs40l26_remove(cs40l26);
+	cs40l26_remove(cs40l26);
 }
 
 static struct i2c_driver cs40l26_i2c_driver = {

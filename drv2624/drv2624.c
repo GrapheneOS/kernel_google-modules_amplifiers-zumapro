@@ -1801,7 +1801,7 @@ drv2624_i2c_probe_err:
 	return err;
 }
 
-static int drv2624_i2c_remove(struct i2c_client *client)
+static void drv2624_i2c_remove(struct i2c_client *client)
 {
 	struct drv2624_data *drv2624 = i2c_get_clientdata(client);
 
@@ -1813,8 +1813,6 @@ static int drv2624_i2c_remove(struct i2c_client *client)
 
 	destroy_workqueue(drv2624->drv2624_wq);
 	mutex_destroy(&drv2624->lock);
-
-	return 0;
 }
 
 static const struct i2c_device_id drv2624_i2c_id[] = {
