@@ -3200,7 +3200,7 @@ err:
 }
 EXPORT_SYMBOL_GPL(cs35l45_probe);
 
-int cs35l45_remove(struct cs35l45_private *cs35l45)
+void cs35l45_remove(struct cs35l45_private *cs35l45)
 {
 	if (cs35l45->reset_gpio)
 		gpiod_set_value_cansleep(cs35l45->reset_gpio, 0);
@@ -3211,8 +3211,6 @@ int cs35l45_remove(struct cs35l45_private *cs35l45)
 	destroy_workqueue(cs35l45->wq);
 	wm_adsp2_remove(&cs35l45->dsp);
 	regulator_bulk_disable(CS35L45_NUM_SUPPLIES, cs35l45->supplies);
-
-	return 0;
 }
 EXPORT_SYMBOL_GPL(cs35l45_remove);
 

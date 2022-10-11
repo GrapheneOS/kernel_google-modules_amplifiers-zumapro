@@ -11713,7 +11713,7 @@ err:
 	return ret;
 }
 
-static int cs40l2x_i2c_remove(struct i2c_client *i2c_client)
+static void cs40l2x_i2c_remove(struct i2c_client *i2c_client)
 {
 	struct cs40l2x_private *cs40l2x = i2c_get_clientdata(i2c_client);
 
@@ -11762,8 +11762,6 @@ static int cs40l2x_i2c_remove(struct i2c_client *i2c_client)
 	regulator_bulk_disable(cs40l2x->num_supplies, cs40l2x->supplies);
 
 	mutex_destroy(&cs40l2x->lock);
-
-	return 0;
 }
 
 static int __maybe_unused cs40l2x_suspend(struct device *dev)

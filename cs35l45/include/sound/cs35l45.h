@@ -193,7 +193,7 @@ struct cs35l45_private {
 
 int cs35l45_initialize(struct cs35l45_private *cs35l45);
 int cs35l45_probe(struct cs35l45_private *cs35l45);
-int cs35l45_remove(struct cs35l45_private *cs35l45);
+void cs35l45_remove(struct cs35l45_private *cs35l45);
 
 struct of_entry {
 	const char *name;

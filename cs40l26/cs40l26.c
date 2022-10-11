@@ -4859,7 +4859,7 @@ err:
 }
 EXPORT_SYMBOL(cs40l26_probe);
 
-int cs40l26_remove(struct cs40l26_private *cs40l26)
+void cs40l26_remove(struct cs40l26_private *cs40l26)
 {
 	struct regulator *vp_consumer =
 			cs40l26_supplies[CS40L26_VP_SUPPLY].consumer;
@@ -4906,8 +4906,6 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 
 	if (cs40l26->input)
 		input_unregister_device(cs40l26->input);
-
-	return 0;
 }
 EXPORT_SYMBOL(cs40l26_remove);
 
