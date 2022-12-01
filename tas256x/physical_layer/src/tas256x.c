@@ -1677,6 +1677,8 @@ int tas256x_update_icn_hysterisis(struct tas256x_priv *p_tas256x, int value,
 			data = (char *)&(icn_hyst_96kHz[value][0]);
 		else if (sample_rate == 48000)
 			data = (char *)&(icn_hyst_48kHz[value][0]);
+		else
+			return n_result;
 
 		if (ch == channel_both) {
 			for (i = 0; i < p_tas256x->mn_channels; i++) {
