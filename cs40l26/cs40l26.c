@@ -457,13 +457,17 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26,
 
 	switch (state) {
 	case CS40L26_PM_STATE_WAKEUP:
+		ATRACE_BEGIN("CS40L26_PM_STATE_WAKEUP");
 		ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
 				cmd, CS40L26_DSP_MBOX_RESET);
 		if (ret)
 			return ret;
 
+		ATRACE_END();
+
 		break;
 	case CS40L26_PM_STATE_PREVENT_HIBERNATE:
+		ATRACE_BEGIN("CS40L26_PM_STATE_PREVENT_HIBERNATE");
 		for (i = 0; i < CS40L26_DSP_STATE_ATTEMPTS; i++) {
 			ret = cs40l26_ack_write(cs40l26,
 					CS40L26_DSP_VIRTUAL1_MBOX_1,
@@ -493,6 +497,8 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26,
 			dev_err(cs40l26->dev, "DSP not starting\n");
 			return -ETIMEDOUT;
 		}
+
+		ATRACE_END();
 
 		break;
 	case CS40L26_PM_STATE_ALLOW_HIBERNATE:
@@ -691,23 +697,27 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 
 		switch (val) {
 		case CS40L26_DSP_MBOX_COMPLETE_MBOX:
+			ATRACE_END();
 			dev_dbg(dev, "Mailbox: COMPLETE_MBOX\n");
 			complete_all(&cs40l26->erase_cont);
 			cs40l26_vibe_state_update(cs40l26,
 					CS40L26_VIBE_STATE_EVENT_MBOX_COMPLETE);
 			break;
 		case CS40L26_DSP_MBOX_COMPLETE_GPIO:
+			ATRACE_END();
 			dev_dbg(dev, "Mailbox: COMPLETE_GPIO\n");
 			cs40l26_vibe_state_update(cs40l26,
 					CS40L26_VIBE_STATE_EVENT_GPIO_COMPLETE);
 			break;
 		case CS40L26_DSP_MBOX_COMPLETE_I2S:
+			ATRACE_END();
 			dev_dbg(dev, "Mailbox: COMPLETE_I2S\n");
 			/* ASP is interrupted */
 			if (cs40l26->asp_enable)
 				complete(&cs40l26->i2s_cont);
 			break;
 		case CS40L26_DSP_MBOX_TRIGGER_I2S:
+			ATRACE_BEGIN("TRIGGER_I2S");
 			dev_dbg(dev, "Mailbox: TRIGGER_I2S\n");
 			complete(&cs40l26->i2s_cont);
 			break;
@@ -717,17 +727,21 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 				return -EPERM;
 			}
 
+			ATRACE_BEGIN("TRIGGER_CP");
 			dev_dbg(dev, "Mailbox: TRIGGER_CP\n");
 			cs40l26_vibe_state_update(cs40l26,
 					CS40L26_VIBE_STATE_EVENT_MBOX_PLAYBACK);
 			break;
 		case CS40L26_DSP_MBOX_TRIGGER_GPIO:
+			ATRACE_BEGIN("TRIGGER_GPIO");
 			dev_dbg(dev, "Mailbox: TRIGGER_GPIO\n");
 			cs40l26_vibe_state_update(cs40l26,
 					CS40L26_VIBE_STATE_EVENT_GPIO_TRIGGER);
 			break;
 		case CS40L26_DSP_MBOX_PM_AWAKE:
+			ATRACE_BEGIN("AWAKE");
 			cs40l26->wksrc_sts |= CS40L26_WKSRC_STS_EN;
+			ATRACE_END();
 			dev_dbg(dev, "Mailbox: AWAKE\n");
 			break;
 		case CS40L26_DSP_MBOX_F0_EST_START:
@@ -1980,6 +1994,7 @@ static void cs40l26_set_gain(struct input_dev *dev, u16 gain)
 {
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 
+	ATRACE_BEGIN(__func__);
 	if (gain >= CS40L26_NUM_PCT_MAP_VALUES) {
 		dev_err(cs40l26->dev, "Gain value %u %% out of bounds\n", gain);
 		return;
@@ -1988,6 +2003,7 @@ static void cs40l26_set_gain(struct input_dev *dev, u16 gain)
 	cs40l26->gain_pct = gain;
 
 	queue_work(cs40l26->vibe_workqueue, &cs40l26->set_gain_work);
+	ATRACE_END();
 }
 
 static int cs40l26_playback_effect(struct input_dev *dev,
@@ -1996,6 +2012,7 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 	struct ff_effect *effect;
 
+	ATRACE_BEGIN(__func__);
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d, val = %d\n", __func__,
 			effect_id, val);
 
@@ -2012,6 +2029,7 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 	else
 		queue_work(cs40l26->vibe_workqueue, &cs40l26->vibe_stop_work);
 
+	ATRACE_END();
 	return 0;
 }
 
@@ -2877,6 +2895,7 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 	int len = effect->u.periodic.custom_len;
 	int ret;
 
+	ATRACE_BEGIN(__func__);
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d\n", __func__, effect->id);
 
 	memcpy(&cs40l26->upload_effect, effect, sizeof(struct ff_effect));
@@ -2911,6 +2930,7 @@ out_free:
 	memset(&cs40l26->upload_effect, 0, sizeof(struct ff_effect));
 	kfree(cs40l26->raw_custom_data);
 	cs40l26->raw_custom_data = NULL;
+	ATRACE_END();
 
 	return ret;
 }
@@ -3074,6 +3094,7 @@ static int cs40l26_erase_effect(struct input_dev *dev, int effect_id)
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 	struct ff_effect *effect;
 
+	ATRACE_BEGIN(__func__);
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d\n", __func__, effect_id);
 
 	effect = &dev->ff->effects[effect_id];
@@ -3089,6 +3110,7 @@ static int cs40l26_erase_effect(struct input_dev *dev, int effect_id)
 	/* Wait for erase to finish */
 	flush_work(&cs40l26->erase_work);
 
+	ATRACE_END();
 	return cs40l26->erase_ret;
 }
 

@@ -41,6 +41,7 @@
 #include <sound/soc.h>
 #include <sound/initval.h>
 #include <sound/tlv.h>
+#include <trace/hooks/systrace.h>
 
 #include "cl_dsp.h"
 

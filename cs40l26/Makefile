@@ -23,9 +23,12 @@ EXTRA_CFLAGS += -DDYNAMIC_DEBUG_MODULE
 EXTRA_CFLAGS += -DCONFIG_INPUT_CS40L26_ATTR_UNDER_BUS
 EXTRA_CFLAGS += -DCONFIG_GOOG_CUST
 
+include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
+
 modules modules_install clean:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) \
 		$(KBUILD_OPTIONS) \
 		EXTRA_CFLAGS="$(EXTRA_CFLAGS)" \
+		KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" \
 		W=1 $(@)
 
