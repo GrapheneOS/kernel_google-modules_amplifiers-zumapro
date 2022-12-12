@@ -460,8 +460,8 @@ bool tas256x_iv_sense_enable_get(struct tas256x_priv *p_tas256x, int ch)
 }
 
 /*No need channel argument*/
-int tas256x_set_iv_slot(struct tas256x_priv *p_tas256x, int ch, int vslot,
-	int islot)
+int tas256x_set_iv_slot(struct tas256x_priv *p_tas256x, int ch, int islot,
+	int vslot)
 {
 	int n_result = 0;
 
