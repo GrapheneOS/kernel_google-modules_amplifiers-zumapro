@@ -3,8 +3,10 @@
 # Makefile for Cirrus Logic haptic driver.
 #
 
-input-cs40l26-i2c-objs := cs40l26.o cs40l26-tables.o cs40l26-sysfs.o cs40l26-i2c.o
-input-cs40l26-spi-objs := cs40l26.o cs40l26-tables.o cs40l26-sysfs.o cs40l26-spi.o
+input-cs40l26-i2c-objs := cs40l26.o cs40l26-tables.o cs40l26-sysfs.o \
+			  cs40l26-i2c.o cs40l26-debugfs.o cl_dsp-debugfs.o
+input-cs40l26-spi-objs := cs40l26.o cs40l26-tables.o cs40l26-sysfs.o \
+			  cs40l26-spi.o cs40l26-debugfs.o cl_dsp-debugfs.o
 snd-soc-cs40l26-objs := cs40l26-codec.o
 
 obj-$(CONFIG_INPUT_CS40L26_I2C)	+= input-cs40l26-i2c.o
