@@ -323,15 +323,17 @@ EXPORT_SYMBOL(cl_dsp_logger_update);
 
 static int cl_dsp_debugfs_logger_open(struct inode *inode, struct file *file)
 {
+#if !IS_ENABLED(CONFIG_GOOG_CUST)
 	struct cl_dsp_debugfs *db;
+#endif
 	int ret;
 
 	ret = simple_open(inode, file);
 	if (ret)
 		return ret;
-
+#if !IS_ENABLED(CONFIG_GOOG_CUST)
 	db = file->private_data;
-
+#endif
 	return 0;
 }
 
