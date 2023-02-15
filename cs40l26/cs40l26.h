@@ -1183,7 +1183,7 @@
 
 #define CS40L26_A2H_MAX_TUNINGS	5
 
-#define CS40L26_A2H_VOLUME_MAX		0x7FFFFF
+#define CS40L26_A2H_LEVEL_MAX		0x7FFFFF
 
 #define CS40L26_A2H_DELAY_MAX		0x190
 
@@ -1274,7 +1274,7 @@
 #define CS40L26_COMP_EN_F0_SHIFT    0
 
 /* FW EXT */
-#define CS40L26_SVC_FOR_STREAMING_MASK	BIT(0)
+#define CS40L26_SVC_EN_MASK	BIT(0)
 
 /* DBC */
 #define CS40L26_DBC_ENABLE_MASK			BIT(1)
@@ -1483,6 +1483,8 @@ struct cs40l26_platform_data {
 	bool dbc_enable_default;
 	u32 dbc_defaults[CS40L26_DBC_NUM_CONTROLS];
 	bool pwle_zero_cross;
+	u32 press_idx;
+	u32 release_idx;
 };
 
 struct cs40l26_uploaded_effect {
@@ -1555,13 +1557,13 @@ struct cs40l26_private {
 	unsigned int svc_le_est_stored;
 	u32 *no_wait_ram_indices;
 	ssize_t num_no_wait_ram_indices;
-	#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_DEBUG_FS
 	struct dentry *debugfs_root;
 	char *dbg_fw_ctrl_name;
 	u32 dbg_fw_algo_id;
 	bool dbg_fw_ym;
 	struct cl_dsp_debugfs *cl_dsp_db;
-	#endif
+#endif
 };
 
 struct cs40l26_codec {
@@ -1576,7 +1578,7 @@ struct cs40l26_codec {
 	int tdm_width;
 	int tdm_slots;
 	int tdm_slot[2];
-	bool bypass_dsp;
+	bool dsp_bypass;
 };
 
 struct cs40l26_pll_sysclk_config {

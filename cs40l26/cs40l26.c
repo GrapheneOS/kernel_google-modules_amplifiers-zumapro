@@ -18,6 +18,24 @@ static inline bool section_complete(struct cs40l26_owt_section *s)
 	return s->delay ? true : false;
 }
 
+static u32 gpio_map_get(struct device_node *np, enum cs40l26_gpio_map gpio)
+{
+	const char *bank, *name = gpio == CS40L26_GPIO_MAP_A_PRESS ?
+			"cirrus,press-index" : "cirrus,release-index";
+	u32 val;
+
+	if (!of_property_read_string_index(np, name, 0, &bank) &&
+		!of_property_read_u32_index(np, name, 1, &val)) {
+		if (!strncmp(bank, "RAM", 3))
+			return (val & CS40L26_BTN_INDEX_MASK) |
+				(1 << CS40L26_BTN_BANK_SHIFT);
+		else if (!strncmp(bank, "ROM", 3))
+			return val & CS40L26_BTN_INDEX_MASK;
+	}
+
+	return CS40L26_EVENT_MAP_GPI_DISABLE;
+}
+
 static int cs40l26_dsp_read(struct cs40l26_private *cs40l26, u32 reg, u32 *val)
 {
 	struct regmap *regmap = cs40l26->regmap;
@@ -3197,10 +3215,6 @@ static int cs40l26_input_init(struct cs40l26_private *cs40l26)
 	}
 #endif
 
-	#ifdef CONFIG_DEBUG_FS
-	cs40l26_debugfs_init(cs40l26);
-	#endif
-
 	cs40l26->vibe_init_success = true;
 
 	return ret;
@@ -3307,6 +3321,20 @@ static int cs40l26_gpio_config(struct cs40l26_private *cs40l26)
 #endif
 	else
 		val = 0;
+
+	ret = regmap_write(cs40l26->regmap, CS40L26_A1_EVENT_MAP_1,
+			cs40l26->pdata.press_idx);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to map press GPI event\n");
+		return ret;
+	}
+
+	ret = regmap_write(cs40l26->regmap, CS40L26_A1_EVENT_MAP_2,
+			cs40l26->pdata.release_idx);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to map release GPI event\n");
+		return ret;
+	}
 
 	return cs40l26_irq_update_mask(cs40l26, CS40L26_IRQ1_MASK_1, val, mask);
 }
@@ -3926,6 +3954,10 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 		return ret;
 
 	cs40l26->fw_loaded = true;
+
+#ifdef CONFIG_DEBUG_FS
+	cs40l26_debugfs_init(cs40l26);
+#endif
 
 	ret = cs40l26_pseq_init(cs40l26);
 	if (ret)
@@ -4806,6 +4838,9 @@ static int cs40l26_handle_platform_data(struct cs40l26_private *cs40l26)
 	else
 		cs40l26->pdata.pwle_zero_cross = false;
 
+	cs40l26->pdata.press_idx = gpio_map_get(np, CS40L26_GPIO_MAP_A_PRESS);
+	cs40l26->pdata.release_idx = gpio_map_get(np, CS40L26_GPIO_MAP_A_RELEASE);
+
 	return cs40l26_no_wait_ram_indices_get(cs40l26, np);
 }
 
@@ -4995,9 +5030,9 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 #endif
 	}
 
-	#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_DEBUG_FS
 	cs40l26_debugfs_cleanup(cs40l26);
-	#endif
+#endif
 
 	if (cs40l26->input)
 		input_unregister_device(cs40l26->input);
