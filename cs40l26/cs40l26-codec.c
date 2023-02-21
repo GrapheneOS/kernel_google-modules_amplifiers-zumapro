@@ -89,8 +89,13 @@ static int cs40l26_clk_en(struct snd_soc_dapm_widget *w,
 	struct device *dev = cs40l26->dev;
 	int ret;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
 	dev_info(dev, "%s: %s\n", __func__,
 			event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#else
+	dev_dbg(dev, "%s: %s\n", __func__,
+			event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#endif
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
@@ -208,8 +213,13 @@ static int cs40l26_asp_rx(struct snd_soc_dapm_widget *w,
 	u8 data_src;
 	int ret;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
 	dev_info(dev, "%s: %s\n", __func__,
 			event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#else
+	dev_dbg(dev, "%s: %s\n", __func__,
+			event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#endif
 
 	mutex_lock(&cs40l26->lock);
 
@@ -607,12 +617,16 @@ static int cs40l26_a2h_level_put(struct snd_kcontrol *kcontrol,
 	return ret;
 }
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
 static int cs40l26_slots_get(
 	struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
-
 	struct cs40l26_codec *codec = snd_soc_component_get_drvdata(
 		snd_soc_kcontrol_component(kcontrol));
+
+	dev_dbg(codec->dev, "%s: 0: %ld->%d, 1: %ld->%d\n", __func__,
+		ucontrol->value.integer.value[0], codec->tdm_slot[0],
+		ucontrol->value.integer.value[1], codec->tdm_slot[1]);
 
 	ucontrol->value.integer.value[0] = codec->tdm_slot[0];
 	ucontrol->value.integer.value[1] = codec->tdm_slot[1];
@@ -626,11 +640,16 @@ static int cs40l26_slots_put(
 	struct cs40l26_codec *codec = snd_soc_component_get_drvdata(
 		snd_soc_kcontrol_component(kcontrol));
 
+	dev_dbg(codec->dev, "%s: 0: %d->%ld, 1: %d->%ld\n", __func__,
+		codec->tdm_slot[0], ucontrol->value.integer.value[0],
+		codec->tdm_slot[1], ucontrol->value.integer.value[1]);
+
 	codec->tdm_slot[0] = ucontrol->value.integer.value[0];
 	codec->tdm_slot[1] = ucontrol->value.integer.value[1];
 
 	return 0;
 }
+#endif
 
 static int cs40l26_a2h_delay_get(struct snd_kcontrol *kcontrol,
 		struct snd_ctl_elem_value *ucontrol)
@@ -724,8 +743,10 @@ static const struct snd_kcontrol_new cs40l26_controls[] = {
 			cs40l26_dsp_bypass_put),
 	SOC_SINGLE_EXT("A2H Delay", 0, 0, CS40L26_A2H_DELAY_MAX, 0,
 			cs40l26_a2h_delay_get, cs40l26_a2h_delay_put),
+#if IS_ENABLED(CONFIG_GOOG_CUST)
 	SOC_DOUBLE_EXT("RX Slots", 0, 0, 1, 63, 0, cs40l26_slots_get,
 			cs40l26_slots_put),
+#endif
 };
 
 static const char * const cs40l26_out_mux_texts[] = { "None", "ASP Rx", "DSP Tx" };
@@ -914,8 +935,42 @@ err_pm:
 	return ret;
 }
 
+#if !IS_ENABLED(CONFIG_GOOG_CUST)
+static int cs40l26_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
+		unsigned int rx_mask, int slots, int slot_width)
+{
+	struct cs40l26_codec *codec =
+			snd_soc_component_get_drvdata(dai->component);
+
+	codec->tdm_width = slot_width;
+	codec->tdm_slots = slots;
+
+	/* Reset to slots 0,1 if TDM is being disabled, and catch the case
+	 * where both RX1 and RX2 would be set to slot 0 since that causes
+	 * hardware to flag an error
+	 */
+	if (!slots || rx_mask == 0x1)
+		rx_mask = 0x3;
+
+	codec->tdm_slot[0] = ffs(rx_mask) - 1;
+	rx_mask &= ~(1 << codec->tdm_slot[0]);
+	codec->tdm_slot[1] = ffs(rx_mask) - 1;
+
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	dev_dbg(codec->dev,
+		"%s: tx_mask:0x%X, rx_mask:0x%X, slots:%d, slot_width:%d, "
+		"slot#0: %d, slot#1: %d\n", __func__, tx_mask, rx_mask, slots,
+		slot_width, codec->tdm_slot[0], codec->tdm_slot[1]);
+#endif
+	return 0;
+}
+#endif
+
 static const struct snd_soc_dai_ops cs40l26_dai_ops = {
 	.set_fmt = cs40l26_set_dai_fmt,
+#if !IS_ENABLED(CONFIG_GOOG_CUST)
+	.set_tdm_slot = cs40l26_set_tdm_slot,
+#endif
 	.hw_params = cs40l26_pcm_hw_params,
 };
 
@@ -949,8 +1004,13 @@ static int cs40l26_codec_probe(struct snd_soc_component *component)
 	/* Default audio SCLK frequency */
 	codec->sysclk_rate = CS40L26_PLL_CLK_FRQ_1536000;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
 	codec->tdm_slot[0] = 2;
 	codec->tdm_slot[1] = 3;
+#else
+	codec->tdm_slot[0] = 0;
+	codec->tdm_slot[1] = 1;
+#endif
 
 	return 0;
 }
