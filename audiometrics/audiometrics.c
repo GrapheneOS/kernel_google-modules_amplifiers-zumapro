@@ -507,6 +507,18 @@ err:
 	return length;
 }
 
+void pdm_callback_register(pdm_callback callback, int pdm_total, void* pdm_priv)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(&amcs_pdev->dev);
+
+	mutex_lock(&priv->lock);
+	priv->sz.pdm_cb = callback;
+	priv->sz.pdm_number = pdm_total;
+	priv->sz.pdm_priv = pdm_priv;
+	mutex_unlock(&priv->lock);
+}
+EXPORT_SYMBOL_GPL(pdm_callback_register);
+
 static int amcs_cdev_open(struct inode *inode, struct file *file)
 {
 	struct audiometrics_priv_type *priv = container_of(inode->i_cdev,
