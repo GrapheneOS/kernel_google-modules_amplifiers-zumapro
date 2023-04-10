@@ -3,7 +3,7 @@
 // cs40l26.c -- CS40L26 Boosted Haptic Driver with Integrated DSP and
 // Waveform Memory with Advanced Closed Loop Algorithms and LRA protection
 //
-// Copyright 2021 Cirrus Logic, Inc.
+// Copyright 2022 Cirrus Logic, Inc.
 //
 // Author: Fred Treven <fred.treven@cirrus.com>
 //
@@ -13,33 +13,27 @@
 
 #include "cs40l26.h"
 
-static inline bool is_owt(unsigned int index)
-{
-	return index >= CS40L26_OWT_INDEX_START &&
-						index <= CS40L26_OWT_INDEX_END;
-}
-
-static inline bool is_buzz(unsigned int index)
-{
-	return (index >= CS40L26_BUZZGEN_INDEX_START &&
-					index <= CS40L26_BUZZGEN_INDEX_END);
-}
-
-static inline bool is_ram(unsigned int index)
-{
-	return (index >= CS40L26_RAM_INDEX_START &&
-					index <= CS40L26_RAM_INDEX_END);
-}
-
-static inline bool is_rom(unsigned int index)
-{
-	return (index >= CS40L26_ROM_INDEX_START &&
-					index <= CS40L26_ROM_INDEX_END);
-}
-
 static inline bool section_complete(struct cs40l26_owt_section *s)
 {
 	return s->delay ? true : false;
+}
+
+static u32 gpio_map_get(struct device_node *np, enum cs40l26_gpio_map gpio)
+{
+	const char *bank, *name = gpio == CS40L26_GPIO_MAP_A_PRESS ?
+			"cirrus,press-index" : "cirrus,release-index";
+	u32 val;
+
+	if (!of_property_read_string_index(np, name, 0, &bank) &&
+		!of_property_read_u32_index(np, name, 1, &val)) {
+		if (!strncmp(bank, "RAM", 3))
+			return (val & CS40L26_BTN_INDEX_MASK) |
+				(1 << CS40L26_BTN_BANK_SHIFT);
+		else if (!strncmp(bank, "ROM", 3))
+			return val & CS40L26_BTN_INDEX_MASK;
+	}
+
+	return CS40L26_EVENT_MAP_GPI_DISABLE;
 }
 
 static int cs40l26_dsp_read(struct cs40l26_private *cs40l26, u32 reg, u32 *val)
@@ -212,11 +206,9 @@ int cs40l26_dbc_get(struct cs40l26_private *cs40l26, enum cs40l26_dbc dbc,
 	unsigned int reg;
 	int ret;
 
-	ret = pm_runtime_get_sync(dev);
-	if (ret < 0) {
-		cs40l26_resume_error_handle(dev, ret);
+	ret = cs40l26_pm_enter(dev);
+	if (ret)
 		return ret;
-	}
 
 	mutex_lock(&cs40l26->lock);
 
@@ -232,8 +224,7 @@ int cs40l26_dbc_get(struct cs40l26_private *cs40l26, enum cs40l26_dbc dbc,
 err_pm:
 	mutex_unlock(&cs40l26->lock);
 
-	pm_runtime_mark_last_busy(dev);
-	pm_runtime_put_autosuspend(dev);
+	cs40l26_pm_exit(dev);
 
 	return ret;
 }
@@ -472,13 +463,17 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26,
 
 	switch (state) {
 	case CS40L26_PM_STATE_WAKEUP:
+		ATRACE_BEGIN("CS40L26_PM_STATE_WAKEUP");
 		ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
 				cmd, CS40L26_DSP_MBOX_RESET);
 		if (ret)
 			return ret;
 
+		ATRACE_END();
+
 		break;
 	case CS40L26_PM_STATE_PREVENT_HIBERNATE:
+		ATRACE_BEGIN("CS40L26_PM_STATE_PREVENT_HIBERNATE");
 		for (i = 0; i < CS40L26_DSP_STATE_ATTEMPTS; i++) {
 			ret = cs40l26_ack_write(cs40l26,
 					CS40L26_DSP_VIRTUAL1_MBOX_1,
@@ -508,6 +503,8 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26,
 			dev_err(cs40l26->dev, "DSP not starting\n");
 			return -ETIMEDOUT;
 		}
+
+		ATRACE_END();
 
 		break;
 	case CS40L26_PM_STATE_ALLOW_HIBERNATE:
@@ -539,7 +536,6 @@ static int cs40l26_dsp_start(struct cs40l26_private *cs40l26)
 	u8 dsp_state;
 	unsigned int val;
 	int ret;
-
 
 	ret = regmap_read(cs40l26->regmap, CS40L26_A1_DSP_REQ_ACTIVE_REG,
 			&val);
@@ -696,6 +692,7 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 {
 	struct device *dev = cs40l26->dev;
 	u32 val = 0;
+	int ret;
 
 	while (!cs40l26_mbox_buffer_read(cs40l26, &val)) {
 		if ((val & CS40L26_DSP_MBOX_CMD_INDEX_MASK)
@@ -705,25 +702,40 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 			return -ENOTRECOVERABLE;
 		}
 
+		if ((val & CS40L26_DSP_MBOX_CMD_INDEX_MASK) ==
+				CS40L26_DSP_MBOX_WATERMARK) {
+			dev_dbg(dev, "Mailbox: WATERMARK\n");
+
+			ret = cl_dsp_logger_update(cs40l26->cl_dsp_db);
+			if (ret)
+				return ret;
+
+			continue;
+		}
+
 		switch (val) {
 		case CS40L26_DSP_MBOX_COMPLETE_MBOX:
+			ATRACE_END();
 			dev_dbg(dev, "Mailbox: COMPLETE_MBOX\n");
 			complete_all(&cs40l26->erase_cont);
 			cs40l26_vibe_state_update(cs40l26,
 					CS40L26_VIBE_STATE_EVENT_MBOX_COMPLETE);
 			break;
 		case CS40L26_DSP_MBOX_COMPLETE_GPIO:
+			ATRACE_END();
 			dev_dbg(dev, "Mailbox: COMPLETE_GPIO\n");
 			cs40l26_vibe_state_update(cs40l26,
 					CS40L26_VIBE_STATE_EVENT_GPIO_COMPLETE);
 			break;
 		case CS40L26_DSP_MBOX_COMPLETE_I2S:
+			ATRACE_END();
 			dev_dbg(dev, "Mailbox: COMPLETE_I2S\n");
 			/* ASP is interrupted */
 			if (cs40l26->asp_enable)
 				complete(&cs40l26->i2s_cont);
 			break;
 		case CS40L26_DSP_MBOX_TRIGGER_I2S:
+			ATRACE_BEGIN("TRIGGER_I2S");
 			dev_dbg(dev, "Mailbox: TRIGGER_I2S\n");
 			complete(&cs40l26->i2s_cont);
 			break;
@@ -733,17 +745,21 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 				return -EPERM;
 			}
 
+			ATRACE_BEGIN("TRIGGER_CP");
 			dev_dbg(dev, "Mailbox: TRIGGER_CP\n");
 			cs40l26_vibe_state_update(cs40l26,
 					CS40L26_VIBE_STATE_EVENT_MBOX_PLAYBACK);
 			break;
 		case CS40L26_DSP_MBOX_TRIGGER_GPIO:
+			ATRACE_BEGIN("TRIGGER_GPIO");
 			dev_dbg(dev, "Mailbox: TRIGGER_GPIO\n");
 			cs40l26_vibe_state_update(cs40l26,
 					CS40L26_VIBE_STATE_EVENT_GPIO_TRIGGER);
 			break;
 		case CS40L26_DSP_MBOX_PM_AWAKE:
+			ATRACE_BEGIN("AWAKE");
 			cs40l26->wksrc_sts |= CS40L26_WKSRC_STS_EN;
+			ATRACE_END();
 			dev_dbg(dev, "Mailbox: AWAKE\n");
 			break;
 		case CS40L26_DSP_MBOX_F0_EST_START:
@@ -751,41 +767,27 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 			break;
 		case CS40L26_DSP_MBOX_F0_EST_DONE:
 			dev_dbg(dev, "Mailbox: F0_EST_DONE\n");
-			if (cs40l26->cal_requested &
-				CS40L26_CALIBRATION_CONTROL_REQUEST_F0_AND_Q) {
-				cs40l26->cal_requested &=
-				~CS40L26_CALIBRATION_CONTROL_REQUEST_F0_AND_Q;
-				/* for pm_runtime_get see trigger_calibration */
-				pm_runtime_mark_last_busy(cs40l26->dev);
-				pm_runtime_put_autosuspend(cs40l26->dev);
-			} else {
-				dev_err(dev, "Unexpected mbox msg: %d", val);
-				return -EINVAL;
-			}
-
+			complete(&cs40l26->cal_f0_cont);
 			break;
 		case CS40L26_DSP_MBOX_REDC_EST_START:
 			dev_dbg(dev, "Mailbox: REDC_EST_START\n");
 			break;
 		case CS40L26_DSP_MBOX_REDC_EST_DONE:
 			dev_dbg(dev, "Mailbox: REDC_EST_DONE\n");
-			if (cs40l26->cal_requested &
-				CS40L26_CALIBRATION_CONTROL_REQUEST_REDC) {
-				cs40l26->cal_requested &=
-				~CS40L26_CALIBRATION_CONTROL_REQUEST_REDC;
-				/* for pm_runtime_get see trigger_calibration */
-				pm_runtime_mark_last_busy(cs40l26->dev);
-				pm_runtime_put_autosuspend(cs40l26->dev);
-			} else {
-				dev_err(dev, "Unexpected mbox msg: %d", val);
-				return -EINVAL;
-			}
+			complete(&cs40l26->cal_redc_cont);
 			break;
 		case CS40L26_DSP_MBOX_LE_EST_START:
 			dev_dbg(dev, "Mailbox: LE_EST_START\n");
 			break;
 		case CS40L26_DSP_MBOX_LE_EST_DONE:
 			dev_dbg(dev, "Mailbox: LE_EST_DONE\n");
+			break;
+		case CS40L26_DSP_MBOX_PEQ_CALCULATION_START:
+			dev_dbg(dev, "Mailbox: PEQ_CALCULATION_START\n");
+			break;
+		case CS40L26_DSP_MBOX_PEQ_CALCULATION_DONE:
+			dev_dbg(dev, "Mailbox: PEQ_CALCULATION_DONE\n");
+			complete(&cs40l26->cal_dvl_peq_cont);
 			break;
 		case CS40L26_DSP_MBOX_SYS_ACK:
 			dev_err(dev, "Mailbox: ACK\n");
@@ -800,10 +802,55 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 	return 0;
 }
 
+int cs40l26_copy_f0_est_to_dvl(struct cs40l26_private *cs40l26)
+{
+	u32 reg, f0_measured_q9_14, global_sample_rate, normalized_f0_q1_23;
+	int ret, sample_rate;
+
+	/* Must be awake and under mutex lock */
+	ret = regmap_read(cs40l26->regmap, CS40L26_GLOBAL_SAMPLE_RATE,
+							&global_sample_rate);
+	if (ret)
+		return ret;
+
+	switch (global_sample_rate & CS40L26_GLOBAL_FS_MASK) {
+	case CS40L26_GLOBAL_FS_48K:
+		sample_rate = 48000;
+		break;
+	case CS40L26_GLOBAL_FS_96K:
+		sample_rate = 96000;
+		break;
+	default:
+		dev_warn(cs40l26->dev, "Invalid GLOBAL_FS, %08X",
+							global_sample_rate);
+		return -EINVAL;
+	}
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "F0_EST",
+			CL_DSP_XM_UNPACKED_TYPE,
+			CS40L26_F0_EST_ALGO_ID, &reg);
+	if (ret)
+		return ret;
+
+	ret = regmap_read(cs40l26->regmap, reg, &f0_measured_q9_14);
+	if (ret)
+		return ret;
+
+	ret = cl_dsp_get_reg(cs40l26->dsp, "LRA_NORM_F0",
+			CL_DSP_XM_UNPACKED_TYPE,
+			CS40L26_DVL_ALGO_ID, &reg);
+	if (ret)
+		return ret;
+
+	normalized_f0_q1_23 = (f0_measured_q9_14 << 9) / sample_rate;
+	ret = regmap_write(cs40l26->regmap, reg, normalized_f0_q1_23);
+
+	return ret;
+}
+EXPORT_SYMBOL(cs40l26_copy_f0_est_to_dvl);
+
 int cs40l26_asp_start(struct cs40l26_private *cs40l26)
 {
-	bool ack = false;
-	unsigned int val;
 	int ret;
 
 	if (cs40l26->pdata.asp_scale_pct < CS40L26_GAIN_FULL_SCALE)
@@ -819,29 +866,8 @@ int cs40l26_asp_start(struct cs40l26_private *cs40l26)
 
 	reinit_completion(&cs40l26->i2s_cont);
 
-	ret = regmap_write(cs40l26->regmap, CS40L26_DSP_VIRTUAL1_MBOX_1,
-			CS40L26_DSP_MBOX_CMD_START_I2S);
-	if (ret) {
-		dev_err(cs40l26->dev, "Failed to start I2S\n");
-		return ret;
-	}
-
-	while (!ack) {
-		usleep_range(CS40L26_DSP_TIMEOUT_US_MIN,
-				CS40L26_DSP_TIMEOUT_US_MAX);
-
-		ret = regmap_read(cs40l26->regmap, CS40L26_DSP_VIRTUAL1_MBOX_1,
-				&val);
-		if (ret) {
-			dev_err(cs40l26->dev, "Failed to read from MBOX_1\n");
-			return ret;
-		}
-
-		if (val == CS40L26_DSP_MBOX_RESET)
-			ack = true;
-	}
-
-	return 0;
+	return cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
+			CS40L26_DSP_MBOX_CMD_START_I2S, CS40L26_DSP_MBOX_RESET);
 }
 EXPORT_SYMBOL(cs40l26_asp_start);
 
@@ -854,18 +880,20 @@ void cs40l26_vibe_state_update(struct cs40l26_private *cs40l26,
 		return;
 	}
 
+	dev_dbg(cs40l26->dev, "effects_in_flight = %d\n",
+			cs40l26->effects_in_flight);
+
 	switch (event) {
 	case CS40L26_VIBE_STATE_EVENT_MBOX_PLAYBACK:
 	case CS40L26_VIBE_STATE_EVENT_GPIO_TRIGGER:
 		cs40l26_remove_asp_scaling(cs40l26);
-		cs40l26->effects_in_flight++;
+		cs40l26->effects_in_flight = cs40l26->effects_in_flight <= 0 ? 1 :
+			cs40l26->effects_in_flight + 1;
 		break;
 	case CS40L26_VIBE_STATE_EVENT_MBOX_COMPLETE:
 	case CS40L26_VIBE_STATE_EVENT_GPIO_COMPLETE:
-		cs40l26->effects_in_flight--;
-		if (cs40l26->effects_in_flight < 0)
-			dev_err(cs40l26->dev, "effects_in_flight < 0, %d\n",
-						cs40l26->effects_in_flight);
+		cs40l26->effects_in_flight = cs40l26->effects_in_flight <= 0 ? 0 :
+			cs40l26->effects_in_flight - 1;
 		if (cs40l26->effects_in_flight == 0 && cs40l26->asp_enable)
 			if (cs40l26_asp_start(cs40l26))
 				return;
@@ -1317,8 +1345,8 @@ static irqreturn_t cs40l26_irq(int irq, void *data)
 err:
 	mutex_unlock(&cs40l26->lock);
 
-	pm_runtime_mark_last_busy(dev);
-	pm_runtime_put_autosuspend(dev);
+	cs40l26_pm_exit(dev);
+
 	/* if an error has occurred, all IRQs have not been successfully
 	 * processed; however, IRQ_HANDLED is still returned if at least one
 	 * interrupt request generated by CS40L26 was handled successfully.
@@ -1693,8 +1721,8 @@ static int cs40l26_irq_update_mask(struct cs40l26_private *cs40l26, u32 reg,
 static int cs40l26_buzzgen_set(struct cs40l26_private *cs40l26, u16 freq,
 		u16 level, u16 duration, u8 buzzgen_num)
 {
-	int ret;
 	unsigned int base_reg, freq_reg, level_reg, duration_reg;
+	int ret;
 
 	/* BUZZ_EFFECTS1_BUZZ_xxx are initially populated by contents of OTP.
 	 * The buzz specified by these controls is triggered by writing
@@ -1734,18 +1762,21 @@ static int cs40l26_buzzgen_set(struct cs40l26_private *cs40l26, u16 freq,
 }
 
 static int cs40l26_map_gpi_to_haptic(struct cs40l26_private *cs40l26,
-				u32 index, u8 bank, struct ff_effect *effect)
+		struct ff_effect *effect,
+		struct cs40l26_uploaded_effect *ueffect)
 {
-	int ret;
-	bool edge, ev_handler_bank_ram, owt;
-	u32 reg, write_val;
 	u16 button = effect->trigger.button;
 	u8 gpio = (button & CS40L26_BTN_NUM_MASK) >> CS40L26_BTN_NUM_SHIFT;
+	bool edge, ev_handler_bank_ram, owt, use_timeout;
+	unsigned int fw_rev;
+	u32 reg, write_val;
+	int ret;
 
 	edge = (button & CS40L26_BTN_EDGE_MASK) >> CS40L26_BTN_EDGE_SHIFT;
 
-	switch (bank) {
+	switch (ueffect->wvfrm_bank) {
 	case CS40L26_RAM_BANK_ID:
+	case CS40L26_BUZ_BANK_ID:
 		owt = false;
 		ev_handler_bank_ram = true;
 		break;
@@ -1759,7 +1790,7 @@ static int cs40l26_map_gpi_to_haptic(struct cs40l26_private *cs40l26,
 		break;
 	default:
 		dev_err(cs40l26->dev, "Effect bank %u not supported\n",
-								bank);
+							ueffect->wvfrm_bank);
 		return -EINVAL;
 	}
 
@@ -1770,47 +1801,82 @@ static int cs40l26_map_gpi_to_haptic(struct cs40l26_private *cs40l26,
 	}
 
 	reg = cs40l26->event_map_base + (edge ? 0 : 4);
-	write_val = (index & CS40L26_BTN_INDEX_MASK) |
+	write_val = (ueffect->trigger_index & CS40L26_BTN_INDEX_MASK) |
 			(ev_handler_bank_ram << CS40L26_BTN_BANK_SHIFT) |
 			(owt << CS40L26_BTN_OWT_SHIFT);
 
-	ret = pm_runtime_get_sync(cs40l26->dev);
-	if (ret < 0) {
-		cs40l26_resume_error_handle(cs40l26->dev, ret);
+	ret = regmap_write(cs40l26->regmap, reg, write_val);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to update event map\n");
 		return ret;
 	}
 
-	ret = regmap_write(cs40l26->regmap, reg, write_val);
+	ret = cl_dsp_fw_rev_get(cs40l26->dsp, &fw_rev);
 	if (ret)
-		dev_err(cs40l26->dev, "Failed to update event map\n");
+		return ret;
 
-	pm_runtime_mark_last_busy(cs40l26->dev);
-	pm_runtime_put_autosuspend(cs40l26->dev);
+	use_timeout = (!cs40l26->calib_fw &&
+			fw_rev >= CS40L26_FW_GPI_TIMEOUT_MIN_REV) ||
+			(cs40l26->calib_fw && fw_rev >=
+			CS40L26_FW_GPI_TIMEOUT_CALIB_MIN_REV);
+
+	if (use_timeout) {
+		ret = cl_dsp_get_reg(cs40l26->dsp, "TIMEOUT_GPI_MS",
+				CL_DSP_XM_UNPACKED_TYPE,
+				CS40L26_VIBEGEN_ALGO_ID, &reg);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(cs40l26->regmap, reg, effect->replay.length);
+		if (ret)
+			dev_warn(cs40l26->dev,
+				"Failed to set GPI timeout, continuing...\n");
+	}
+
+	if (edge)
+		ueffect->mapping = CS40L26_GPIO_MAP_A_PRESS;
+	else
+		ueffect->mapping = CS40L26_GPIO_MAP_A_RELEASE;
 
 	return ret;
 }
 
-static struct cs40l26_owt *cs40l26_owt_find(struct cs40l26_private *cs40l26,
+static struct cs40l26_uploaded_effect
+		*cs40l26_uploaded_effect_find(struct cs40l26_private *cs40l26,
 		int id)
 {
-	struct cs40l26_owt *owt;
+	struct list_head *head = &cs40l26->effect_head;
+	struct cs40l26_uploaded_effect *ueffect;
 
-	if (list_empty(&cs40l26->owt_head)) {
-		dev_err(cs40l26->dev, "OWT list is empty\n");
-		return NULL;
+	if (list_empty(head)) {
+		dev_dbg(cs40l26->dev, "Effect list is empty\n");
+		return ERR_PTR(-ENODATA);
 	}
 
-	list_for_each_entry(owt, &cs40l26->owt_head, list) {
-		if (owt->effect_id == id)
+	list_for_each_entry(ueffect, head, list) {
+		if (ueffect->id == id)
 			break;
 	}
 
-	if (owt->effect_id != id) {
-		dev_err(cs40l26->dev, "OWT effect with ID %d not found\n", id);
-		return NULL;
+	if (ueffect->id != id) {
+		dev_dbg(cs40l26->dev, "No such effect (ID = %d)\n", id);
+		return ERR_PTR(-ENODEV);
 	}
 
-	return owt;
+	return ueffect;
+}
+
+static bool cs40l26_is_no_wait_ram_index(struct cs40l26_private *cs40l26,
+		u32 index)
+{
+	int i;
+
+	for (i = 0; i < cs40l26->num_no_wait_ram_indices; i++) {
+		if (cs40l26->no_wait_ram_indices[i] == index)
+			return true;
+	}
+
+	return false;
 }
 
 static void cs40l26_set_gain_worker(struct work_struct *work)
@@ -1821,9 +1887,9 @@ static void cs40l26_set_gain_worker(struct work_struct *work)
 	u32 reg;
 	int ret;
 
-	ret = pm_runtime_get_sync(cs40l26->dev);
-	if (ret < 0)
-		return cs40l26_resume_error_handle(cs40l26->dev, ret);
+	ret = cs40l26_pm_enter(cs40l26->dev);
+	if (ret)
+		return;
 
 	mutex_lock(&cs40l26->lock);
 
@@ -1851,8 +1917,7 @@ static void cs40l26_set_gain_worker(struct work_struct *work)
 
 err_mutex:
 	mutex_unlock(&cs40l26->lock);
-	pm_runtime_mark_last_busy(cs40l26->dev);
-	pm_runtime_put_autosuspend(cs40l26->dev);
+	cs40l26_pm_exit(cs40l26->dev);
 }
 
 static void cs40l26_vibe_start_worker(struct work_struct *work)
@@ -1860,34 +1925,28 @@ static void cs40l26_vibe_start_worker(struct work_struct *work)
 	struct cs40l26_private *cs40l26 = container_of(work,
 			struct cs40l26_private, vibe_start_work);
 	struct device *dev = cs40l26->dev;
-	u32 index = 0;
-	int ret = 0;
+	struct cs40l26_uploaded_effect *ueffect;
 	struct ff_effect *effect;
-	struct cs40l26_owt *owt;
 	unsigned int reg;
-	bool invert;
 	u16 duration;
+	bool invert;
+	int ret;
 
 	dev_dbg(dev, "%s\n", __func__);
 
-	ret = pm_runtime_get_sync(dev);
-	if (ret < 0)
-		return cs40l26_resume_error_handle(dev, ret);
+	ret = cs40l26_pm_enter(dev);
+	if (ret)
+		return;
 
 	mutex_lock(&cs40l26->lock);
 
 	effect = cs40l26->trigger_effect;
 
-	if (effect->u.periodic.waveform == FF_CUSTOM ||
-			effect->u.periodic.waveform == FF_SINE)
-		index = cs40l26->trigger_indices[effect->id];
-
-	if (is_owt(index)) {
-		owt = cs40l26_owt_find(cs40l26, effect->id);
-		if (owt == NULL) {
-			ret = -ENOMEM;
-			goto err_mutex;
-		}
+	ueffect = cs40l26_uploaded_effect_find(cs40l26, effect->id);
+	if (IS_ERR_OR_NULL(ueffect)) {
+		dev_err(dev, "No such effect to play back\n");
+		ret = PTR_ERR(ueffect);
+		goto err_mutex;
 	}
 
 	duration = effect->replay.length;
@@ -1930,9 +1989,11 @@ static void cs40l26_vibe_start_worker(struct work_struct *work)
 	case FF_CUSTOM:
 	case FF_SINE:
 		ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
-				index, CS40L26_DSP_MBOX_RESET);
+				ueffect->trigger_index, CS40L26_DSP_MBOX_RESET);
 		if (ret)
 			goto err_mutex;
+
+		cs40l26->cur_index = ueffect->trigger_index;
 		break;
 	default:
 		dev_err(dev, "Invalid waveform type: 0x%X\n",
@@ -1948,31 +2009,47 @@ static void cs40l26_vibe_start_worker(struct work_struct *work)
 	reinit_completion(&cs40l26->erase_cont);
 err_mutex:
 	mutex_unlock(&cs40l26->lock);
-	pm_runtime_mark_last_busy(dev);
-	pm_runtime_put_autosuspend(dev);
+
+	cs40l26_pm_exit(dev);
 }
 
 static void cs40l26_vibe_stop_worker(struct work_struct *work)
 {
 	struct cs40l26_private *cs40l26 = container_of(work,
 			struct cs40l26_private, vibe_stop_work);
+	bool skip_delay;
+	u32 delay_us;
 	int ret;
 
 	dev_dbg(cs40l26->dev, "%s\n", __func__);
 
-	ret = pm_runtime_get_sync(cs40l26->dev);
-	if (ret < 0)
-		return cs40l26_resume_error_handle(cs40l26->dev, ret);
-
-	/* wait for SVC init phase to complete */
-	if (cs40l26->delay_before_stop_playback_us)
-		usleep_range(cs40l26->delay_before_stop_playback_us,
-				cs40l26->delay_before_stop_playback_us + 100);
+	ret = cs40l26_pm_enter(cs40l26->dev);
+	if (ret)
+		return;
 
 	mutex_lock(&cs40l26->lock);
 
-	if (cs40l26->vibe_state != CS40L26_VIBE_STATE_HAPTIC)
+	delay_us = cs40l26->delay_before_stop_playback_us;
+	skip_delay = cs40l26_is_no_wait_ram_index(cs40l26, cs40l26->cur_index);
+
+	if (delay_us && !skip_delay) {
+		mutex_unlock(&cs40l26->lock);
+
+		dev_info(cs40l26->dev, "Applying delay\n");
+
+		/* wait for SVC init phase to complete */
+		usleep_range(delay_us, delay_us + 100);
+
+		mutex_lock(&cs40l26->lock);
+	} else {
+		dev_info(cs40l26->dev, "Skipping delay\n");
+	}
+
+	if (cs40l26->vibe_state != CS40L26_VIBE_STATE_HAPTIC) {
+		dev_warn(cs40l26->dev, "Attempted stop when vibe_state = %d\n",
+				cs40l26->vibe_state);
 		goto mutex_exit;
+	}
 
 	ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1,
 				CS40L26_STOP_PLAYBACK, CS40L26_DSP_MBOX_RESET);
@@ -1983,14 +2060,14 @@ static void cs40l26_vibe_stop_worker(struct work_struct *work)
 
 mutex_exit:
 	mutex_unlock(&cs40l26->lock);
-	pm_runtime_mark_last_busy(cs40l26->dev);
-	pm_runtime_put_autosuspend(cs40l26->dev);
+	cs40l26_pm_exit(cs40l26->dev);
 }
 
 static void cs40l26_set_gain(struct input_dev *dev, u16 gain)
 {
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 
+	ATRACE_BEGIN(__func__);
 	if (gain >= CS40L26_NUM_PCT_MAP_VALUES) {
 		dev_err(cs40l26->dev, "Gain value %u %% out of bounds\n", gain);
 		return;
@@ -1999,6 +2076,7 @@ static void cs40l26_set_gain(struct input_dev *dev, u16 gain)
 	cs40l26->gain_pct = gain;
 
 	queue_work(cs40l26->vibe_workqueue, &cs40l26->set_gain_work);
+	ATRACE_END();
 }
 
 static int cs40l26_playback_effect(struct input_dev *dev,
@@ -2007,6 +2085,7 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 	struct ff_effect *effect;
 
+	ATRACE_BEGIN(__func__);
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d, val = %d\n", __func__,
 			effect_id, val);
 
@@ -2023,6 +2102,7 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 	else
 		queue_work(cs40l26->vibe_workqueue, &cs40l26->vibe_stop_work);
 
+	ATRACE_END();
 	return 0;
 }
 
@@ -2059,28 +2139,28 @@ EXPORT_SYMBOL(cs40l26_get_num_waves);
 static struct cl_dsp_owt_header *cs40l26_header(struct cs40l26_private *cs40l26,
 		u8 index)
 {
-	if (!cs40l26->dsp || !cs40l26->dsp->wt_desc)
-		return NULL;
-
-	if (index >= cs40l26->dsp->wt_desc->owt.nwaves)
-		return NULL;
+	if (!cs40l26->dsp || !cs40l26->dsp->wt_desc ||
+			index >= cs40l26->dsp->wt_desc->owt.nwaves)
+		return ERR_PTR(-EINVAL);
 
 	return &cs40l26->dsp->wt_desc->owt.waves[index];
-
 }
 
-static int cs40l26_owt_get_wlength(struct cs40l26_private *cs40l26, u8 index)
+static int cs40l26_owt_get_wlength(struct cs40l26_private *cs40l26,
+		u8 index, u32 *wlen_whole)
 {
 	struct device *dev = cs40l26->dev;
 	struct cl_dsp_owt_header *entry;
 	struct cl_dsp_memchunk ch;
 
-	if (index == 0)
+	if (index == 0) {
+		*wlen_whole = 0;
 		return 0;
+	}
 
 	entry = cs40l26_header(cs40l26, index);
-	if (entry == NULL)
-		return -EINVAL;
+	if (IS_ERR(entry))
+		return PTR_ERR(entry);
 
 	switch (entry->type) {
 	case WT_TYPE_V6_PCM_F0_REDC:
@@ -2095,7 +2175,7 @@ static int cs40l26_owt_get_wlength(struct cs40l26_private *cs40l26, u8 index)
 	ch = cl_dsp_memchunk_create(entry->data, sizeof(u32));
 
 	/* First 24 bits of each waveform is the length in samples @ 8 kHz */
-	return cl_dsp_memchunk_read(&ch, 24);
+	return cl_dsp_memchunk_read(cs40l26->dsp, &ch, 24, wlen_whole);
 }
 
 static void cs40l26_owt_set_section_info(struct cs40l26_private *cs40l26,
@@ -2118,35 +2198,63 @@ static void cs40l26_owt_set_section_info(struct cs40l26_private *cs40l26,
 	}
 }
 
-static void cs40l26_owt_get_section_info(struct cs40l26_private *cs40l26,
+static int cs40l26_owt_get_section_info(struct cs40l26_private *cs40l26,
 		struct cl_dsp_memchunk *ch,
 		struct cs40l26_owt_section *sections, u8 nsections)
 {
-	int i;
+	int ret = 0, i;
 
 	for (i = 0; i < nsections; i++) {
-		sections[i].amplitude = cl_dsp_memchunk_read(ch, 8);
-		sections[i].index = cl_dsp_memchunk_read(ch, 8);
-		sections[i].repeat = cl_dsp_memchunk_read(ch, 8);
-		sections[i].flags = cl_dsp_memchunk_read(ch, 8);
-		sections[i].delay = cl_dsp_memchunk_read(ch, 16);
+		ret = cl_dsp_memchunk_read(cs40l26->dsp, ch, 8,
+				&sections[i].amplitude);
+		if (ret)
+			return ret;
+
+		ret = cl_dsp_memchunk_read(cs40l26->dsp, ch, 8,
+				&sections[i].index);
+		if (ret)
+			return ret;
+
+		ret = cl_dsp_memchunk_read(cs40l26->dsp, ch, 8,
+				&sections[i].repeat);
+		if (ret)
+			return ret;
+
+		ret = cl_dsp_memchunk_read(cs40l26->dsp, ch, 8,
+				&sections[i].flags);
+		if (ret)
+			return ret;
+
+		ret = cl_dsp_memchunk_read(cs40l26->dsp, ch, 16,
+				&sections[i].delay);
+		if (ret)
+			return ret;
 
 		if (sections[i].flags & CS40L26_WT_TYPE10_COMP_DURATION_FLAG) {
-			cl_dsp_memchunk_read(ch, 8); /* Skip padding */
-			sections[i].duration = cl_dsp_memchunk_read(ch, 16);
+			/* Skip padding */
+			ret = cl_dsp_memchunk_read(cs40l26->dsp, ch, 8, NULL);
+			if (ret)
+				return ret;
+
+			ret = cl_dsp_memchunk_read(cs40l26->dsp, ch, 16,
+					&sections[i].duration);
+			if (ret)
+				return ret;
 		}
 	}
+
+	return ret;
 }
 
 static int cs40l26_owt_calculate_wlength(struct cs40l26_private *cs40l26,
 	u8 nsections, u8 global_rep, u8 *data, u32 data_size_bytes,
 	u32 *owt_wlen)
 {
-	struct cl_dsp_memchunk ch;
-	u32 total_len = 0, section_len = 0, loop_len = 0;
+	u32 total_len = 0, section_len = 0, loop_len = 0, wlen_whole = 0;
 	bool in_loop = false;
+	int ret = 0, i;
 	struct cs40l26_owt_section *sections;
-	int ret = 0, i, wlen_whole;
+	struct cl_dsp_memchunk ch;
 	u32 dlen, wlen;
 
 	if (nsections < 1) {
@@ -2160,16 +2268,19 @@ static int cs40l26_owt_calculate_wlength(struct cs40l26_private *cs40l26,
 		return -ENOMEM;
 
 	ch = cl_dsp_memchunk_create((void *) data, data_size_bytes);
-	cs40l26_owt_get_section_info(cs40l26, &ch, sections, nsections);
+	ret = cs40l26_owt_get_section_info(cs40l26, &ch, sections, nsections);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to get section info\n");
+		goto err_free;
+	}
 
 	for (i = 0; i < nsections; i++) {
-		wlen_whole = cs40l26_owt_get_wlength(cs40l26,
-				sections[i].index);
-		if (wlen_whole < 0) {
+		ret = cs40l26_owt_get_wlength(cs40l26, sections[i].index,
+				&wlen_whole);
+		if (ret < 0) {
 			dev_err(cs40l26->dev,
 					"Failed to get wlength for index %u\n",
 					sections[i].index);
-			ret = wlen_whole;
 			goto err_free;
 		}
 
@@ -2222,24 +2333,6 @@ err_free:
 	return ret;
 }
 
-static int cs40l26_owt_add(struct cs40l26_private *cs40l26, int effect_id,
-		u32 index)
-{
-	struct cs40l26_owt *owt_new;
-
-	owt_new = kzalloc(sizeof(*owt_new), GFP_KERNEL);
-	if (!owt_new)
-		return -ENOMEM;
-
-	owt_new->effect_id = effect_id;
-	owt_new->trigger_index = index;
-	list_add(&owt_new->list, &cs40l26->owt_head);
-
-	cs40l26->num_owt_effects++;
-
-	return 0;
-}
-
 static int cs40l26_owt_upload(struct cs40l26_private *cs40l26, u8 *data,
 		u32 data_size_bytes)
 {
@@ -2248,11 +2341,9 @@ static int cs40l26_owt_upload(struct cs40l26_private *cs40l26, u8 *data,
 	unsigned int write_reg, reg, wt_offset, wt_size_words, wt_base;
 	int ret;
 
-	ret = pm_runtime_get_sync(dev);
-	if (ret < 0) {
-		cs40l26_resume_error_handle(dev, ret);
+	ret = cs40l26_pm_enter(dev);
+	if (ret)
 		return ret;
-	}
 
 	ret = cl_dsp_get_reg(dsp, "OWT_NEXT_XM", CL_DSP_XM_UNPACKED_TYPE,
 			CS40L26_VIBEGEN_ALGO_ID, &reg);
@@ -2305,8 +2396,7 @@ static int cs40l26_owt_upload(struct cs40l26_private *cs40l26, u8 *data,
 			data_size_bytes, write_reg);
 
 err_pm:
-	pm_runtime_mark_last_busy(dev);
-	pm_runtime_put_autosuspend(dev);
+	cs40l26_pm_exit(dev);
 
 	return ret;
 }
@@ -2318,21 +2408,26 @@ static u8 *cs40l26_ncw_amp_scaling(struct cs40l26_private *cs40l26, u8 amp,
 	struct cl_dsp_memchunk in_ch, out_ch;
 	u16 amp_product;
 	u8 *out_data;
-	int i;
+	int i, ret;
 
 	if (nsections <= 0) {
 		dev_err(cs40l26->dev, "Too few sections for NCW\n");
-		return NULL;
+		return ERR_PTR(-EINVAL);
 	}
 
 	sections = kcalloc(nsections, sizeof(struct cs40l26_owt_section),
 			GFP_KERNEL);
 	if (!sections)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	in_ch = cl_dsp_memchunk_create(in_data, data_bytes);
 
-	cs40l26_owt_get_section_info(cs40l26, &in_ch, sections, nsections);
+	ret = cs40l26_owt_get_section_info(cs40l26, &in_ch, sections,
+			nsections);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to get section info\n");
+		goto sections_free;
+	}
 
 	for (i = 0; i < nsections; i++) {
 		if (sections[i].index != 0) {
@@ -2343,17 +2438,18 @@ static u8 *cs40l26_ncw_amp_scaling(struct cs40l26_private *cs40l26, u8 amp,
 	}
 
 	out_data = kcalloc(data_bytes, sizeof(u8), GFP_KERNEL);
-	if (!out_data)
+	if (!out_data) {
+		ret = -ENOMEM;
 		goto sections_free;
+	}
 
 	out_ch = cl_dsp_memchunk_create((void *) out_data, data_bytes);
 	cs40l26_owt_set_section_info(cs40l26, &out_ch, sections, nsections);
 
-
 sections_free:
 	kfree(sections);
 
-	return out_data;
+	return ret ? ERR_PTR(ret) : out_data;
 }
 
 static int cs40l26_owt_comp_data_size(struct cs40l26_private *cs40l26,
@@ -2369,8 +2465,8 @@ static int cs40l26_owt_comp_data_size(struct cs40l26_private *cs40l26,
 		}
 
 		header = cs40l26_header(cs40l26, sections[i].index);
-		if (header == NULL)
-			return -ENOMEM;
+		if (IS_ERR(header))
+			return PTR_ERR(header);
 
 		if (header->type == WT_TYPE_V6_COMPOSITE) {
 			size += (header->size - 2) * 4;
@@ -2388,7 +2484,8 @@ static int cs40l26_owt_comp_data_size(struct cs40l26_private *cs40l26,
 }
 
 static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
-		u32 in_data_nibbles, bool pwle, bool svc_waveform, u8 **out_data)
+		u32 in_data_nibbles, bool pwle, bool svc_waveform,
+		u8 **out_data)
 {
 	u8 nsections, global_rep, out_nsections = 0;
 	int ret = 0, pos_byte = 0, in_pos_nib = 2;
@@ -2416,12 +2513,15 @@ static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
 					out_data_bytes);
 		cl_dsp_memchunk_write(&out_ch, 16,
 					CS40L26_WT_HEADER_DEFAULT_FLAGS |
-					(svc_waveform ? CS40L26_OWT_SVC_METADATA : 0));
+					(svc_waveform ?
+					CS40L26_OWT_SVC_METADATA : 0));
 		cl_dsp_memchunk_write(&out_ch, 8, WT_TYPE_V6_PWLE);
 		cl_dsp_memchunk_write(&out_ch, 24, CS40L26_WT_HEADER_OFFSET +
-					(svc_waveform ? CS40L26_WT_METADATA_OFFSET : 0));
+					(svc_waveform ?
+					CS40L26_WT_METADATA_OFFSET : 0));
 		cl_dsp_memchunk_write(&out_ch, 24, (in_data_bytes / 4) -
-					(svc_waveform ? CS40L26_WT_METADATA_OFFSET : 0));
+					(svc_waveform ?
+					CS40L26_WT_METADATA_OFFSET : 0));
 
 
 		memcpy(*out_data + out_ch.bytes, in_data, in_data_bytes);
@@ -2430,21 +2530,29 @@ static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
 	}
 
 	ch = cl_dsp_memchunk_create((void *) in_data, in_data_bytes);
-	cl_dsp_memchunk_read(&ch, 8); /* Skip padding */
-	ret = cl_dsp_memchunk_read(&ch, 8);
-	if (ret < 0)
+	/* Skip padding */
+	ret = cl_dsp_memchunk_read(cs40l26->dsp, &ch, 8, NULL);
+	if (ret)
 		return ret;
 
-	nsections = ret;
+	ret = cl_dsp_memchunk_read(cs40l26->dsp, &ch, 8, &nsections);
+	if (ret)
+		return ret;
 
-	global_rep = cl_dsp_memchunk_read(&ch, 8);
+	ret = cl_dsp_memchunk_read(cs40l26->dsp, &ch, 8, &global_rep);
+	if (ret)
+		return ret;
 
 	sections = kcalloc(nsections, sizeof(struct cs40l26_owt_section),
 			GFP_KERNEL);
 	if (!sections)
 		return -ENOMEM;
 
-	cs40l26_owt_get_section_info(cs40l26, &ch, sections, nsections);
+	ret = cs40l26_owt_get_section_info(cs40l26, &ch, sections, nsections);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to get section info\n");
+		return ret;
+	}
 
 	data_bytes = cs40l26_owt_comp_data_size(cs40l26, nsections,
 			sections);
@@ -2484,18 +2592,33 @@ static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
 		}
 
 		header = cs40l26_header(cs40l26, sections[i].index);
-		if (header == NULL) {
-			ret = -ENOMEM;
+		if (IS_ERR(header)) {
+			ret = PTR_ERR(header);
 			goto data_err_free;
 		}
 
 		if (header->type == WT_TYPE_V6_COMPOSITE) {
 			ch = cl_dsp_memchunk_create(header->data, 8);
-			cl_dsp_memchunk_read(&ch, 24); /* Skip Wlength */
-			cl_dsp_memchunk_read(&ch, 8); /* Skip Padding */
-			ncw_nsections = cl_dsp_memchunk_read(&ch, 8);
+			/* Skip Wlength */
+			ret = cl_dsp_memchunk_read(cs40l26->dsp, &ch, 24, NULL);
+			if (ret)
+				return ret;
 
-			ncw_global_rep = cl_dsp_memchunk_read(&ch, 8);
+			/* Skip Padding */
+			ret = cl_dsp_memchunk_read(cs40l26->dsp, &ch, 8, NULL);
+			if (ret)
+				return ret;
+
+			ret = cl_dsp_memchunk_read(cs40l26->dsp, &ch, 8,
+					&ncw_nsections);
+			if (ret)
+				return ret;
+
+			ret = cl_dsp_memchunk_read(cs40l26->dsp, &ch, 8,
+					&ncw_global_rep);
+			if (ret)
+				return ret;
+
 			if (ncw_global_rep != 0) {
 				dev_err(dev,
 					"No NCW support for outer repeat\n");
@@ -2509,8 +2632,8 @@ static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
 			ncw_data = cs40l26_ncw_amp_scaling(cs40l26,
 					sections[i].amplitude, ncw_nsections,
 					header->data + 8, ncw_bytes);
-			if (ncw_data == NULL) {
-				ret = -ENOMEM;
+			if (IS_ERR(ncw_data)) {
+				ret = PTR_ERR(ncw_data);
 				goto data_err_free;
 			}
 
@@ -2584,62 +2707,44 @@ sections_err_free:
 
 static u8 cs40l26_get_lowest_free_buzzgen(struct cs40l26_private *cs40l26)
 {
-	int buzzgen, i;
+	u8 buzzgen = 1;
+	struct cs40l26_uploaded_effect *ueffect;
 
-	/* Note that this search starts at RAM_BUZZ1 and does not utilize the
-	 * OTP buzz
-	 */
-	for (buzzgen = 1; buzzgen <= CS40L26_BUZZGEN_NUM_CONFIGS; buzzgen++) {
-		for (i = 0; i < FF_MAX_EFFECTS; i++) {
-			if (cs40l26->trigger_indices[i] ==
-					CS40L26_BUZZGEN_INDEX_START + buzzgen)
-				break;
-		}
+	if (list_empty(&cs40l26->effect_head))
+		return buzzgen;
 
-		if (i == FF_MAX_EFFECTS)
-			break;
+	list_for_each_entry(ueffect, &cs40l26->effect_head, list) {
+		if (ueffect->wvfrm_bank == CS40L26_BUZ_BANK_ID)
+			buzzgen++;
 	}
 
 	return buzzgen;
 }
 
 static int cs40l26_sine_upload(struct cs40l26_private *cs40l26,
-						struct ff_effect *effect)
+		struct ff_effect *effect,
+		struct cs40l26_uploaded_effect *ueffect)
 {
 	struct device *dev = cs40l26->dev;
-	int ret;
 	u8 lowest_free_buzzgen, level;
-	u16 freq;
-	u32 trigger_index;
+	u16 freq, period;
+	int ret;
 
-	if (effect->u.periodic.period) {
-		if (effect->u.periodic.period < CS40L26_BUZZGEN_PERIOD_MIN ||
-		effect->u.periodic.period > CS40L26_BUZZGEN_PERIOD_MAX) {
-			dev_err(dev,
-				"%u ms period not within range (4-10 ms)\n",
-				effect->u.periodic.period);
-			return -EINVAL;
-		}
-	} else {
-		dev_err(dev, "Sine wave period not specified\n");
-		return -EINVAL;
-	}
+	if (effect->u.periodic.period < CS40L26_BUZZGEN_PER_MIN)
+		period = CS40L26_BUZZGEN_PER_MIN;
+	else if (effect->u.periodic.period > CS40L26_BUZZGEN_PER_MAX)
+		period = CS40L26_BUZZGEN_PER_MAX;
+	else
+		period = effect->u.periodic.period;
 
-	if (effect->u.periodic.magnitude) {
-		if (effect->u.periodic.magnitude < CS40L26_BUZZGEN_LEVEL_MIN ||
-		effect->u.periodic.magnitude > CS40L26_BUZZGEN_LEVEL_MAX) {
-			dev_err(dev,
-				"%u magnitude not within range (%d-%d)\n",
-				effect->u.periodic.magnitude,
-				CS40L26_BUZZGEN_LEVEL_MIN,
-				CS40L26_BUZZGEN_LEVEL_MAX);
-			return -EINVAL;
-		}
+	freq = CS40L26_MS_TO_HZ(period);
 
+	if (effect->u.periodic.magnitude < CS40L26_BUZZGEN_LEVEL_MIN)
+		level = CS40L26_BUZZGEN_LEVEL_MIN;
+	else if (effect->u.periodic.magnitude > CS40L26_BUZZGEN_LEVEL_MAX)
+		level = CS40L26_BUZZGEN_LEVEL_MAX;
+	else
 		level = effect->u.periodic.magnitude;
-	} else {
-		level = CS40L26_BUZZGEN_LEVEL_DEFAULT;
-	}
 
 	lowest_free_buzzgen = cs40l26_get_lowest_free_buzzgen(cs40l26);
 	dev_dbg(dev, "lowest_free_buzzgen: %d", lowest_free_buzzgen);
@@ -2649,19 +2754,147 @@ static int cs40l26_sine_upload(struct cs40l26_private *cs40l26,
 		return -ENOSPC;
 	}
 
-	freq = CS40L26_MS_TO_HZ(effect->u.periodic.period);
-
 	ret = cs40l26_buzzgen_set(cs40l26, freq, level,
 				effect->replay.length, lowest_free_buzzgen);
 	if (ret)
 		return ret;
 
-	trigger_index = CS40L26_BUZZGEN_INDEX_START + lowest_free_buzzgen;
-	cs40l26->trigger_indices[effect->id] = trigger_index;
+	ueffect->id = effect->id;
+	ueffect->wvfrm_bank = CS40L26_BUZ_BANK_ID;
+	ueffect->trigger_index = CS40L26_BUZZGEN_INDEX_START +
+					lowest_free_buzzgen;
 
-	if (effect->trigger.button)
-		ret = cs40l26_map_gpi_to_haptic(cs40l26, trigger_index,
-						CS40L26_RAM_BANK_ID, effect);
+	return ret;
+}
+
+static int cs40l26_custom_upload(struct cs40l26_private *cs40l26,
+		struct ff_effect *effect,
+		struct cs40l26_uploaded_effect *ueffect)
+{
+	s16 first = cs40l26->raw_custom_data[0];
+	bool is_pwle = (first != CS40L26_WT_TYPE10_COMP_BUFFER);
+	bool is_svc = (first == CS40L26_SVC_ID);
+	struct device *dev = cs40l26->dev;
+	u32 nwaves, min_index, max_index, trigger_index;
+	int ret, data_len, refactored_data_len;
+	u8 *refactored_data;
+	u16 index, bank;
+
+	data_len = effect->u.periodic.custom_len;
+
+	if (data_len > CS40L26_CUSTOM_DATA_SIZE) {
+		refactored_data_len = cs40l26_refactor_owt(cs40l26,
+				cs40l26->raw_custom_data, data_len, is_pwle,
+				is_svc, &refactored_data);
+		if (refactored_data_len <= 0) {
+			dev_err(cs40l26->dev, "Failed to refactor OWT\n");
+			return -ENOMEM;
+		}
+
+		ret = cs40l26_owt_upload(cs40l26, refactored_data,
+				refactored_data_len);
+		kfree(refactored_data);
+		if (ret)
+			return ret;
+
+		bank = (u16) CS40L26_OWT_BANK_ID;
+		index = (u16) cs40l26->num_owt_effects;
+	} else {
+		bank = (u16) first;
+		index = (u16) (cs40l26->raw_custom_data[1] &
+				CS40L26_MAX_INDEX_MASK);
+	}
+
+	ret = cs40l26_get_num_waves(cs40l26, &nwaves);
+	if (ret)
+		return ret;
+
+	switch (bank) {
+	case CS40L26_RAM_BANK_ID:
+		if (nwaves - cs40l26->num_owt_effects == 0) {
+			dev_err(dev, "No waveforms in RAM bank\n");
+			return -EINVAL;
+		}
+
+		min_index = CS40L26_RAM_INDEX_START;
+		max_index = min_index + nwaves - cs40l26->num_owt_effects - 1;
+		break;
+	case CS40L26_ROM_BANK_ID:
+		min_index = CS40L26_ROM_INDEX_START;
+		max_index = CS40L26_ROM_INDEX_END;
+		break;
+	case CS40L26_OWT_BANK_ID:
+		min_index = CS40L26_OWT_INDEX_START;
+		max_index = CS40L26_OWT_INDEX_END;
+		break;
+	default:
+		dev_err(dev, "Bank ID (%u) invalid\n", bank);
+		return -EINVAL;
+	}
+
+	trigger_index = index + min_index;
+	if (trigger_index < min_index || trigger_index > max_index) {
+		dev_err(dev, "Index 0x%X out of bounds (0x%X - 0x%X)\n",
+				trigger_index, min_index, max_index);
+		return -EINVAL;
+	}
+	dev_dbg(dev, "ID = %d, trigger index = 0x%08X\n", effect->id,
+			trigger_index);
+
+	if (bank == CS40L26_OWT_BANK_ID)
+		cs40l26->num_owt_effects++;
+
+	ueffect->id = effect->id;
+	ueffect->wvfrm_bank = bank;
+	ueffect->trigger_index = trigger_index;
+
+	return ret;
+}
+
+static int cs40l26_uploaded_effect_add(struct cs40l26_private *cs40l26,
+		struct ff_effect *effect)
+{
+	struct device *dev = cs40l26->dev;
+	bool is_new = false;
+	struct cs40l26_uploaded_effect *ueffect;
+	int ret;
+
+	ueffect = cs40l26_uploaded_effect_find(cs40l26, effect->id);
+	if (IS_ERR_OR_NULL(ueffect)) {
+		is_new = true;
+		ueffect = kzalloc(sizeof(*ueffect), GFP_KERNEL);
+		if (!ueffect)
+			return -ENOMEM;
+	}
+
+	if (effect->u.periodic.waveform == FF_CUSTOM) {
+		ret = cs40l26_custom_upload(cs40l26, effect, ueffect);
+	} else if (effect->u.periodic.waveform == FF_SINE) {
+		ret = cs40l26_sine_upload(cs40l26, effect, ueffect);
+	} else {
+		dev_err(dev, "Periodic waveform type 0x%X not supported\n",
+				effect->u.periodic.waveform);
+		ret = -EINVAL;
+	}
+
+	if (ret)
+		goto err_free;
+
+	if (effect->trigger.button) {
+		ret = cs40l26_map_gpi_to_haptic(cs40l26, effect, ueffect);
+		if (ret)
+			goto err_free;
+	} else {
+		ueffect->mapping = CS40L26_GPIO_MAP_INVALID;
+	}
+
+	if (is_new)
+		list_add(&ueffect->list, &cs40l26->effect_head);
+
+	return 0;
+err_free:
+	if (is_new)
+		kfree(ueffect);
 
 	return ret;
 }
@@ -2671,16 +2904,13 @@ static void cs40l26_upload_worker(struct work_struct *work)
 	struct cs40l26_private *cs40l26 = container_of(work,
 			struct cs40l26_private, upload_work);
 	struct device *cdev = cs40l26->dev;
-	u8 *refactored_data = NULL;
-	int ret = 0, refactored_size, len;
-	u32 trigger_index, min_index, max_index, nwaves;
 	struct ff_effect *effect;
-	u16 index, bank;
-	bool pwle, svc_waveform;
+	u32 nwaves;
+	int ret;
 
-	ret = pm_runtime_get_sync(cdev);
-	if (ret < 0)
-		return cs40l26_resume_error_handle(cdev, ret);
+	ret = cs40l26_pm_enter(cdev);
+	if (ret)
+		return;
 
 	mutex_lock(&cs40l26->lock);
 
@@ -2692,126 +2922,20 @@ static void cs40l26_upload_worker(struct work_struct *work)
 		goto out_mutex;
 	}
 
-	switch (effect->u.periodic.waveform) {
-	case FF_CUSTOM:
-		pwle = (cs40l26->raw_custom_data[0] ==
-			CS40L26_WT_TYPE10_COMP_BUFFER) ? false : true;
-		svc_waveform = (cs40l26->raw_custom_data[0] ==
-			CS40L26_SVC_ID) ? true : false;
-
-		len = effect->u.periodic.custom_len;
-
-		if (len > CS40L26_CUSTOM_DATA_SIZE) {
-			refactored_size = cs40l26_refactor_owt(cs40l26,
-				cs40l26->raw_custom_data, len, pwle, svc_waveform,
-				&refactored_data);
-
-			if (refactored_size <= 0) {
-				dev_err(cdev,
-					"Failed to refactor OWT waveform\n");
-				ret = refactored_size;
-				goto out_mutex;
-			}
-
-			ret = cs40l26_owt_upload(cs40l26, refactored_data,
-					refactored_size);
-			if (ret)
-				goto out_free;
-
-			bank = CS40L26_OWT_BANK_ID;
-			index = cs40l26->num_owt_effects;
-		} else {
-			bank = ((u16) cs40l26->raw_custom_data[0]);
-			index = ((u16) cs40l26->raw_custom_data[1]) &
-					CS40L26_MAX_INDEX_MASK;
-		}
-
-		ret = cs40l26_get_num_waves(cs40l26, &nwaves);
-		if (ret)
-			goto out_free;
-
-		switch (bank) {
-		case CS40L26_RAM_BANK_ID:
-			if (nwaves - cs40l26->num_owt_effects == 0) {
-				dev_err(cdev, "No waveforms in RAM bank\n");
-				ret = -EINVAL;
-				goto out_free;
-			} else {
-				min_index = CS40L26_RAM_INDEX_START;
-				max_index = min_index + nwaves - 1 -
-						cs40l26->num_owt_effects;
-			}
-			break;
-		case CS40L26_ROM_BANK_ID:
-			min_index = CS40L26_ROM_INDEX_START;
-			max_index = CS40L26_ROM_INDEX_END;
-			break;
-		case CS40L26_OWT_BANK_ID:
-			min_index = CS40L26_OWT_INDEX_START;
-			max_index = CS40L26_OWT_INDEX_END;
-			break;
-		default:
-			dev_err(cdev, "Bank ID (%u) out of bounds\n", bank);
-			ret = -EINVAL;
-			goto out_free;
-		}
-
-		trigger_index = index + min_index;
-
-		if (trigger_index >= min_index && trigger_index <= max_index) {
-			cs40l26->trigger_indices[effect->id] = trigger_index;
-		} else {
-			dev_err(cdev,
-				"Index (0x%X) out of bounds (0x%X - 0x%X)\n",
-				trigger_index, min_index, max_index);
-			ret = -EINVAL;
-			goto out_free;
-		}
-
-		if (is_owt(trigger_index)) {
-			ret = cs40l26_owt_add(cs40l26, effect->id,
-					trigger_index);
-			if (ret)
-				goto out_free;
-		}
-
-		dev_dbg(cdev, "%s: ID = %u, index = 0x%08X\n",
-				__func__, effect->id, trigger_index);
-
-		if (effect->trigger.button) {
-			ret = cs40l26_map_gpi_to_haptic(cs40l26,
-						trigger_index, bank, effect);
-			if (ret)
-				goto out_free;
-		}
-
-		break;
-	case FF_SINE:
-		ret = cs40l26_sine_upload(cs40l26, effect);
-		if (ret)
-			goto out_mutex;
-
-		break;
-	default:
-		dev_err(cdev, "Periodic waveform type 0x%X not supported\n",
-				effect->u.periodic.waveform);
-		ret = -EINVAL;
+	ret = cs40l26_uploaded_effect_add(cs40l26, effect);
+	if (ret)
 		goto out_mutex;
-	}
 
 	ret = cs40l26_get_num_waves(cs40l26, &nwaves);
 	if (ret)
-		goto out_free;
+		goto out_mutex;
 
 	dev_dbg(cdev, "Total number of waveforms = %u\n", nwaves);
 
-out_free:
-	kfree(refactored_data);
-
 out_mutex:
 	mutex_unlock(&cs40l26->lock);
-	pm_runtime_mark_last_busy(cdev);
-	pm_runtime_put_autosuspend(cdev);
+
+	cs40l26_pm_exit(cdev);
 
 	cs40l26->upload_ret = ret;
 }
@@ -2823,6 +2947,7 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 	int len = effect->u.periodic.custom_len;
 	int ret;
 
+	ATRACE_BEGIN(__func__);
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d\n", __func__, effect->id);
 
 	memcpy(&cs40l26->upload_effect, effect, sizeof(struct ff_effect));
@@ -2856,6 +2981,8 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 out_free:
 	memset(&cs40l26->upload_effect, 0, sizeof(struct ff_effect));
 	kfree(cs40l26->raw_custom_data);
+	cs40l26->raw_custom_data = NULL;
+	ATRACE_END();
 
 	return ret;
 }
@@ -2869,73 +2996,43 @@ const struct attribute_group *cs40l26_dev_attr_groups[] = {
 };
 #endif
 
-static int cs40l26_clear_gpi_event_reg(struct cs40l26_private *cs40l26, u32 reg)
-{
-	struct regmap *regmap = cs40l26->regmap;
-	int ret;
-
-	ret = regmap_write(regmap, reg, CS40L26_EVENT_MAP_GPI_EVENT_DISABLE);
-	if (ret)
-		dev_err(cs40l26->dev, "Failed to clear gpi reg: %08X", reg);
-
-	return ret;
-}
-
 static int cs40l26_erase_gpi_mapping(struct cs40l26_private *cs40l26,
-								int effect_id)
+		enum cs40l26_gpio_map mapping)
 {
-	struct device *dev = cs40l26->dev;
-	u32 index = cs40l26->trigger_indices[effect_id];
-	u8 trigger_index, gpi_index;
-	u32 reg, val;
-	int i, ret;
+	int ret = 0;
+	u32 reg;
 
-	trigger_index = index & 0xFF;
+	if (mapping == CS40L26_GPIO_MAP_A_PRESS)
+		reg = CS40L26_A1_EVENT_MAP_1;
+	else if (mapping == CS40L26_GPIO_MAP_A_RELEASE)
+		reg = CS40L26_A1_EVENT_MAP_2;
+	else
+		ret = -EINVAL;
 
-	for (i = 0; i < CS40L26_EVENT_MAP_NUM_GPI_REGS; i++) {
-		reg = cs40l26->event_map_base + (i * 4);
-		ret = regmap_read(cs40l26->regmap, reg, &val);
-		if (ret) {
-			dev_err(dev, "Failed to read gpi event reg: 0x%08X",
-					reg);
-			return ret;
-		}
-		gpi_index = val & 0xFF;
+	if (ret) {
+		dev_err(cs40l26->dev, "Invalid GPI mapping %u\n", mapping);
+		return ret;
+	}
 
-		if (is_buzz(index) ||
-			(is_owt(index) && val & CS40L26_BTN_OWT_MASK) ||
-			(is_ram(index) && val & CS40L26_BTN_BANK_MASK) ||
-			(is_rom(index) && ~val & CS40L26_BTN_BANK_MASK)) {
-			if (trigger_index == gpi_index) {
-				ret = cs40l26_clear_gpi_event_reg(cs40l26, reg);
-				if (ret)
-					return ret;
-			}
-		}
+	ret = regmap_write(cs40l26->regmap, reg, CS40L26_EVENT_MAP_GPI_DISABLE);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to clear GPI mapping %u\n",
+				mapping);
+		return ret;
 	}
 
 	return 0;
 }
 
-static int cs40l26_erase_buzz(struct cs40l26_private *cs40l26, int effect_id)
-{
-	cs40l26->trigger_indices[effect_id] = 0;
-
-	return 0;
-}
-
-static int cs40l26_erase_owt(struct cs40l26_private *cs40l26, int effect_id)
+static int cs40l26_erase_owt(struct cs40l26_private *cs40l26,
+		struct cs40l26_uploaded_effect *ueffect)
 {
 	u32 cmd = CS40L26_DSP_MBOX_CMD_OWT_DELETE_BASE;
-	struct cs40l26_owt *owt, *owt_tmp;
-	u32 index;
+	u32 index = ueffect->trigger_index;
+	struct cs40l26_uploaded_effect *ueffect_tmp;
 	int ret;
 
-	owt = cs40l26_owt_find(cs40l26, effect_id);
-	if (owt == NULL)
-		return -ENOMEM;
-
-	cmd |= (owt->trigger_index & 0xFF);
+	cmd |= (index & 0xFF);
 
 	ret = cs40l26_ack_write(cs40l26, CS40L26_DSP_VIRTUAL1_MBOX_1, cmd,
 			CS40L26_DSP_MBOX_RESET);
@@ -2943,39 +3040,40 @@ static int cs40l26_erase_owt(struct cs40l26_private *cs40l26, int effect_id)
 		return ret;
 
 	/* Update indices for OWT waveforms uploaded after erased effect */
-	index = cs40l26->trigger_indices[effect_id];
-	list_for_each_entry(owt_tmp, &cs40l26->owt_head, list) {
-		if (owt_tmp->trigger_index > index) {
-			owt_tmp->trigger_index--;
-			cs40l26->trigger_indices[owt_tmp->effect_id]--;
-		}
+	list_for_each_entry(ueffect_tmp, &cs40l26->effect_head, list) {
+		if (ueffect_tmp->wvfrm_bank == CS40L26_OWT_BANK_ID &&
+				ueffect_tmp->trigger_index > index)
+			ueffect_tmp->trigger_index--;
 	}
 
-	list_del(&owt->list);
-	kfree(owt);
 	cs40l26->num_owt_effects--;
 
 	return 0;
 }
 
-
 static void cs40l26_erase_worker(struct work_struct *work)
 {
 	struct cs40l26_private *cs40l26 = container_of(work,
 			struct cs40l26_private, erase_work);
-	int ret = 0;
-	int effect_id;
+	struct cs40l26_uploaded_effect *ueffect;
+	int effect_id, ret;
 	u16 duration;
-	u32 index;
 
-	ret = pm_runtime_get_sync(cs40l26->dev);
-	if (ret < 0)
-		return cs40l26_resume_error_handle(cs40l26->dev, ret);
+	ret = cs40l26_pm_enter(cs40l26->dev);
+	if (ret)
+		return;
 
 	mutex_lock(&cs40l26->lock);
 
 	effect_id = cs40l26->erase_effect->id;
-	index = cs40l26->trigger_indices[effect_id];
+	ueffect = cs40l26_uploaded_effect_find(cs40l26, effect_id);
+	if (IS_ERR_OR_NULL(ueffect)) {
+		dev_err(cs40l26->dev, "No such effect to erase (%d)\n",
+				effect_id);
+		ret = PTR_ERR(ueffect);
+		goto out_mutex;
+	}
+
 	duration = (cs40l26->erase_effect->replay.length == 0) ?
 		CS40L26_MAX_WAIT_VIBE_COMPLETE_MS :
 		cs40l26->erase_effect->replay.length + CS40L26_ERASE_BUFFER_MS;
@@ -2987,7 +3085,8 @@ static void cs40l26_erase_worker(struct work_struct *work)
 		if (!wait_for_completion_timeout(&cs40l26->erase_cont,
 				msecs_to_jiffies(duration))) {
 			ret = -ETIME;
-			dev_err(cs40l26->dev, "Failed to erase effect: %d", ret);
+			dev_err(cs40l26->dev, "Failed to erase effect (%d)\n",
+					effect_id);
 			goto pm_err;
 		}
 		mutex_lock(&cs40l26->lock);
@@ -2995,31 +3094,28 @@ static void cs40l26_erase_worker(struct work_struct *work)
 
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d\n", __func__, effect_id);
 
-	if (is_owt(index)) {
-		ret = cs40l26_erase_owt(cs40l26, effect_id);
+	if (ueffect->mapping != CS40L26_GPIO_MAP_INVALID) {
+		ret = cs40l26_erase_gpi_mapping(cs40l26, ueffect->mapping);
 		if (ret)
-			dev_err(cs40l26->dev, "Failed to erase OWT effect: %d",
-									ret);
+			goto out_mutex;
+		ueffect->mapping = CS40L26_GPIO_MAP_INVALID;
+	}
+
+	if (ueffect->wvfrm_bank == CS40L26_OWT_BANK_ID)
+		ret = cs40l26_erase_owt(cs40l26, ueffect);
+
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to erase effect: %d", ret);
 		goto out_mutex;
 	}
 
-	if (is_buzz(index)) {
-		ret = cs40l26_erase_buzz(cs40l26, effect_id);
-		if (ret)
-			dev_err(cs40l26->dev, "Failed to erase buzz effect: %d",
-									ret);
-		goto out_mutex;
-	}
-
-	ret = cs40l26_erase_gpi_mapping(cs40l26, effect_id);
-	if (ret)
-		dev_err(cs40l26->dev, "Failed to erase gpi mapping: %d", ret);
+	list_del(&ueffect->list);
+	kfree(ueffect);
 
 out_mutex:
 	mutex_unlock(&cs40l26->lock);
 pm_err:
-	pm_runtime_mark_last_busy(cs40l26->dev);
-	pm_runtime_put_autosuspend(cs40l26->dev);
+	cs40l26_pm_exit(cs40l26->dev);
 
 	cs40l26->erase_ret = ret;
 }
@@ -3029,6 +3125,7 @@ static int cs40l26_erase_effect(struct input_dev *dev, int effect_id)
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 	struct ff_effect *effect;
 
+	ATRACE_BEGIN(__func__);
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d\n", __func__, effect_id);
 
 	effect = &dev->ff->effects[effect_id];
@@ -3044,6 +3141,7 @@ static int cs40l26_erase_effect(struct input_dev *dev, int effect_id)
 	/* Wait for erase to finish */
 	flush_work(&cs40l26->erase_work);
 
+	ATRACE_END();
 	return cs40l26->erase_ret;
 }
 
@@ -3213,10 +3311,30 @@ static int cs40l26_gpio_config(struct cs40l26_private *cs40l26)
 			CS40L26_IRQ1_GPIO1_RISE));
 
 	if (mask_gpio)
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+		/* Extend the GPIO trigger mask to ignore GPIO1 falling edge */
+		val = (u32) GENMASK(CS40L26_IRQ1_GPIO4_FALL,
+				CS40L26_IRQ1_GPIO1_FALL);
+#else
 		val = (u32) GENMASK(CS40L26_IRQ1_GPIO4_FALL,
 				CS40L26_IRQ1_GPIO2_RISE);
+#endif
 	else
 		val = 0;
+
+	ret = regmap_write(cs40l26->regmap, CS40L26_A1_EVENT_MAP_1,
+			cs40l26->pdata.press_idx);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to map press GPI event\n");
+		return ret;
+	}
+
+	ret = regmap_write(cs40l26->regmap, CS40L26_A1_EVENT_MAP_2,
+			cs40l26->pdata.release_idx);
+	if (ret) {
+		dev_err(cs40l26->dev, "Failed to map release GPI event\n");
+		return ret;
+	}
 
 	return cs40l26_irq_update_mask(cs40l26, CS40L26_IRQ1_MASK_1, val, mask);
 }
@@ -3682,37 +3800,6 @@ static int cs40l26_bst_ipk_config(struct cs40l26_private *cs40l26)
 			BIT(CS40L26_IRQ1_BST_IPK_FLAG));
 }
 
-static int cs40l26_owt_setup(struct cs40l26_private *cs40l26)
-{
-	u32 reg, offset, base;
-	int ret;
-
-	INIT_LIST_HEAD(&cs40l26->owt_head);
-	cs40l26->num_owt_effects = 0;
-
-	ret = cl_dsp_get_reg(cs40l26->dsp, CS40L26_WT_NAME_XM,
-		CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &base);
-	if (ret)
-		return ret;
-
-	ret = cl_dsp_get_reg(cs40l26->dsp, "OWT_NEXT_XM",
-			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &reg);
-	if (ret)
-		return ret;
-
-	ret = regmap_read(cs40l26->regmap, reg, &offset);
-	if (ret) {
-		dev_err(cs40l26->dev, "Failed to get wavetable offset\n");
-		return ret;
-	}
-
-	ret = regmap_write(cs40l26->regmap, reg, 0xFFFFFF);
-	if (ret)
-		dev_err(cs40l26->dev, "Failed to write OWT terminator\n");
-
-	return ret;
-}
-
 static int cs40l26_lbst_short_test(struct cs40l26_private *cs40l26)
 {
 	struct regmap *regmap = cs40l26->regmap;
@@ -3793,13 +3880,6 @@ static int cs40l26_handle_errata(struct cs40l26_private *cs40l26)
 		num_writes = CS40L26_ERRATA_A1_EXPL_EN_NUM_WRITES;
 	}
 
-	ret = regmap_register_patch(cs40l26->regmap, cs40l26_a1_errata,
-			num_writes);
-	if (ret) {
-		dev_err(cs40l26->dev, "Failed to patch A1 errata\n");
-		return ret;
-	}
-
 	return cs40l26_pseq_multi_write(cs40l26, cs40l26_a1_errata, num_writes,
 			false, CS40L26_PSEQ_OP_WRITE_FULL);
 }
@@ -3874,6 +3954,10 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 		return ret;
 
 	cs40l26->fw_loaded = true;
+
+#ifdef CONFIG_DEBUG_FS
+	cs40l26_debugfs_init(cs40l26);
+#endif
 
 	ret = cs40l26_pseq_init(cs40l26);
 	if (ret)
@@ -3963,11 +4047,9 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 	if (ret)
 		return ret;
 
-	ret = pm_runtime_get_sync(dev);
-	if (ret < 0) {
-		cs40l26_resume_error_handle(dev, ret);
+	ret = cs40l26_pm_enter(dev);
+	if (ret)
 		return ret;
-	}
 
 	ret = cl_dsp_get_reg(cs40l26->dsp, "TIMEOUT_MS",
 			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &reg);
@@ -3991,9 +4073,7 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 	dev_info(dev, "%s loaded with %u RAM waveforms\n", CS40L26_DEV_NAME,
 			nwaves);
 
-	ret = cs40l26_owt_setup(cs40l26);
-	if (ret)
-		goto pm_err;
+	cs40l26->num_owt_effects = 0;
 
 	value = (cs40l26->comp_enable_redc << CS40L26_COMP_EN_REDC_SHIFT) |
 			(cs40l26->comp_enable_f0 << CS40L26_COMP_EN_F0_SHIFT);
@@ -4011,8 +4091,7 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 	}
 
 pm_err:
-	pm_runtime_mark_last_busy(dev);
-	pm_runtime_put_autosuspend(dev);
+	cs40l26_pm_exit(dev);
 
 	return ret;
 }
@@ -4051,7 +4130,8 @@ int cs40l26_svc_le_estimate(struct cs40l26_private *cs40l26, unsigned int *le)
 		return ret;
 
 	ret = cl_dsp_get_reg(cs40l26->dsp, "LE_EST_STATUS",
-			CL_DSP_YM_UNPACKED_TYPE, CS40l26_SVC_ALGO_ID, &reg);
+			     CL_DSP_YM_UNPACKED_TYPE, CS40L26_SVC_ALGO_ID,
+			     &reg);
 	if (ret)
 		return ret;
 
@@ -4077,20 +4157,10 @@ int cs40l26_svc_le_estimate(struct cs40l26_private *cs40l26, unsigned int *le)
 EXPORT_SYMBOL(cs40l26_svc_le_estimate);
 
 static int cs40l26_tuning_select_from_svc_le(struct cs40l26_private *cs40l26,
-		u32 *tuning_num)
+		unsigned int le, u32 *tuning_num)
 {
-	unsigned int le;
-	int ret, i;
-
-	ret = pm_runtime_get_sync(cs40l26->dev);
-	if (ret < 0) {
-		cs40l26_resume_error_handle(cs40l26->dev, ret);
-		return ret;
-	}
-
-	ret = cs40l26_svc_le_estimate(cs40l26, &le);
-	if (ret)
-		goto pm_err;
+	int ret = 0;
+	int i;
 
 	if (le) {
 		for (i = 0; i < cs40l26->num_svc_le_vals; i++) {
@@ -4108,90 +4178,89 @@ static int cs40l26_tuning_select_from_svc_le(struct cs40l26_private *cs40l26,
 	if (!le || i == cs40l26->num_svc_le_vals)
 		dev_warn(cs40l26->dev, "Using default tunings\n");
 
-pm_err:
-	pm_runtime_mark_last_busy(cs40l26->dev);
-	pm_runtime_put_autosuspend(cs40l26->dev);
-
 	return ret;
 }
 
-static char **cs40l26_get_tuning_names(struct cs40l26_private *cs40l26, int n,
-		u32 tuning)
+static char **cs40l26_get_tuning_names(struct cs40l26_private *cs40l26,
+					int *actual_num_files, u32 tuning)
 {
-	char svc_tuning[CS40L26_TUNING_FILE_NAME_MAX_LEN];
-	char wt_tuning[CS40L26_TUNING_FILE_NAME_MAX_LEN];
-	char **coeff_files, tuning_str[2];
-	int i;
+	char **coeff_files;
+	int i, file_count = 0;
 
-	coeff_files = kcalloc(n, sizeof(char *), GFP_KERNEL);
+	coeff_files = kcalloc(
+			CS40L26_MAX_TUNING_FILES, sizeof(char *), GFP_KERNEL);
 	if (!coeff_files)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
-	for (i = 0; i < n; i++) {
+	for (i = 0; i < CS40L26_MAX_TUNING_FILES; i++) {
 		coeff_files[i] =
 			kzalloc(CS40L26_TUNING_FILE_NAME_MAX_LEN, GFP_KERNEL);
 		if (!coeff_files[i])
 			goto err_free;
 	}
 
-	strscpy(svc_tuning, CS40L26_SVC_TUNING_FILE_PREFIX,
-			CS40L26_TUNING_FILE_NAME_MAX_LEN);
-
-	if (tuning) { /* Concatenate tuning number if required */
-		strscpy(wt_tuning, CS40L26_WT_FILE_PREFIX,
-			CS40L26_TUNING_FILE_NAME_MAX_LEN);
-
-		snprintf(tuning_str, 2, "%d", tuning);
-
-		strncat(wt_tuning, tuning_str, 2);
-		strncat(svc_tuning, tuning_str, 2);
-
-		strncat(wt_tuning, CS40L26_TUNING_FILE_SUFFIX,
-				CS40L26_TUNING_FILE_NAME_MAX_LEN);
+	if (tuning) {
+		snprintf(coeff_files[file_count++],
+			CS40L26_TUNING_FILE_NAME_MAX_LEN, "%s%d%s",
+			CS40L26_WT_FILE_PREFIX, tuning,
+			CS40L26_TUNING_FILE_SUFFIX);
 	} else {
-		strscpy(wt_tuning, CS40L26_WT_FILE_NAME,
-				CS40L26_TUNING_FILE_NAME_MAX_LEN);
+		strscpy(coeff_files[file_count++],
+			CS40L26_WT_FILE_NAME,
+			CS40L26_TUNING_FILE_NAME_MAX_LEN);
 	}
 
-	strncat(svc_tuning, CS40L26_TUNING_FILE_SUFFIX,
+	if (tuning) {
+		snprintf(coeff_files[file_count++],
+			CS40L26_TUNING_FILE_NAME_MAX_LEN, "%s%d%s",
+			CS40L26_SVC_TUNING_FILE_PREFIX, tuning,
+			CS40L26_TUNING_FILE_SUFFIX);
+	} else {
+		strscpy(coeff_files[file_count++],
+			CS40L26_SVC_TUNING_FILE_NAME,
 			CS40L26_TUNING_FILE_NAME_MAX_LEN);
+	}
 
-	strscpy(coeff_files[0], wt_tuning, CS40L26_TUNING_FILE_NAME_MAX_LEN);
+	if (cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_DVL_ALGO_ID))
+		strscpy(coeff_files[file_count++],
+			CS40L26_DVL_FILE_NAME,
+			CS40L26_TUNING_FILE_NAME_MAX_LEN);
 
 	if (cs40l26->fw_id == CS40L26_FW_ID) {
-		strscpy(coeff_files[1], CS40L26_A2H_TUNING_FILE_NAME,
-			CS40L26_TUNING_FILE_NAME_MAX_LEN);
-		strscpy(coeff_files[2], svc_tuning,
-			CS40L26_TUNING_FILE_NAME_MAX_LEN);
-		strscpy(coeff_files[3], CS40L26_DVL_FILE_NAME,
-			CS40L26_TUNING_FILE_NAME_MAX_LEN);
+		if (cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_A2H_ALGO_ID))
+			strscpy(coeff_files[file_count++],
+				CS40L26_A2H_TUNING_FILE_NAME,
+				CS40L26_TUNING_FILE_NAME_MAX_LEN);
 	} else {
-		strscpy(coeff_files[1], CS40L26_CALIB_BIN_FILE_NAME,
+		strscpy(coeff_files[file_count++],
+			CS40L26_CALIB_BIN_FILE_NAME,
 			CS40L26_TUNING_FILE_NAME_MAX_LEN);
 	}
 
+	*actual_num_files = file_count;
 	return coeff_files;
 
 err_free:
+	for (; i >= 0; i--)
+		kfree(coeff_files[i]);
 	kfree(coeff_files);
-	return NULL;
+	*actual_num_files = 0;
+	return ERR_PTR(-ENOMEM);
 }
 
 static int cs40l26_coeff_load(struct cs40l26_private *cs40l26, u32 tuning)
 {
 	struct device *dev = cs40l26->dev;
 	const struct firmware *coeff;
-	int i, ret, num_files;
+	int i, ret, num_files_to_load;
 	char **coeff_files;
 
-	num_files = (cs40l26->fw_id == CS40L26_FW_ID) ?
-		CS40L26_TUNING_FILES_RUNTIME : CS40L26_TUNING_FILES_CAL;
+	coeff_files = cs40l26_get_tuning_names(
+					cs40l26, &num_files_to_load, tuning);
+	if (IS_ERR(coeff_files))
+		return PTR_ERR(coeff_files);
 
-	coeff_files = cs40l26_get_tuning_names(cs40l26, num_files, tuning);
-	if (!coeff_files)
-		return -ENOMEM;
-
-	for (i = 0; i < num_files; i++) {
+	for (i = 0; i < num_files_to_load; i++) {
 		ret = request_firmware(&coeff, coeff_files[i], dev);
 		if (ret) {
 			dev_warn(dev, "Continuing...\n");
@@ -4306,8 +4375,8 @@ static int cs40l26_cl_dsp_reinit(struct cs40l26_private *cs40l26)
 	}
 
 	cs40l26->dsp = cl_dsp_create(cs40l26->dev, cs40l26->regmap);
-	if (!cs40l26->dsp)
-		return -ENOMEM;
+	if (IS_ERR(cs40l26->dsp))
+		return PTR_ERR(cs40l26->dsp);
 
 	return cl_dsp_wavetable_create(cs40l26->dsp, CS40L26_VIBEGEN_ALGO_ID,
 		CS40L26_WT_NAME_XM, CS40L26_WT_NAME_YM, CS40L26_WT_FILE_NAME);
@@ -4317,9 +4386,10 @@ static int cs40l26_fw_upload(struct cs40l26_private *cs40l26)
 {
 	bool svc_le_required = cs40l26->num_svc_le_vals && !cs40l26->calib_fw;
 	struct device *dev = cs40l26->dev;
-	u32 tuning_num = 0;
+	u32 rev, branch, tuning_num = 0;
 	const struct firmware *fw;
 	int ret;
+	unsigned int le = 0;
 
 	cs40l26->fw_loaded = false;
 
@@ -4355,17 +4425,47 @@ static int cs40l26_fw_upload(struct cs40l26_private *cs40l26)
 		return ret;
 
 	if (svc_le_required) {
-		ret = cs40l26_dsp_config(cs40l26);
+		ret = cl_dsp_fw_rev_get(cs40l26->dsp, &rev);
 		if (ret)
 			return ret;
 
-		ret = cs40l26_tuning_select_from_svc_le(cs40l26, &tuning_num);
-		if (ret)
-			return ret;
+		branch = CL_DSP_GET_MAJOR(rev);
 
-		cs40l26_pm_runtime_teardown(cs40l26);
+		switch (branch) {
+		case CS40L26_FW_MAINT_BRANCH:
+			ret = cs40l26_dsp_config(cs40l26);
+			if (ret)
+				return ret;
 
-		ret = cs40l26_dsp_pre_config(cs40l26);
+			ret = cs40l26_pm_enter(dev);
+			if (ret)
+				return ret;
+
+			ret = cs40l26_svc_le_estimate(cs40l26, &le);
+			if (ret)
+				dev_warn(dev, "svc_le est failed, %d", ret);
+
+			cs40l26_pm_exit(dev);
+
+			cs40l26_pm_runtime_teardown(cs40l26);
+
+			ret = cs40l26_dsp_pre_config(cs40l26);
+			if (ret)
+				return ret;
+
+			break;
+
+		case CS40L26_FW_BRANCH:
+			le = cs40l26->svc_le_est_stored;
+			break;
+
+		default:
+			dev_err(dev, "Invalid firmware branch, %d", branch);
+			return -EINVAL;
+		}
+
+		ret = cs40l26_tuning_select_from_svc_le(cs40l26,
+							le, &tuning_num);
 		if (ret)
 			return ret;
 	}
@@ -4377,35 +4477,30 @@ static int cs40l26_fw_upload(struct cs40l26_private *cs40l26)
 	return cs40l26_dsp_config(cs40l26);
 }
 
-int cs40l26_fw_swap(struct cs40l26_private *cs40l26, u32 id)
+int cs40l26_fw_swap(struct cs40l26_private *cs40l26, const u32 id)
 {
 	struct device *dev = cs40l26->dev;
-	bool deferred = cs40l26->fw_defer;
-	u32 pseq_rom_end_of_script_loc;
-	int ret;
-
-	if (cs40l26->fw_defer) {
-		cs40l26->fw_defer = false;
-	} else {
-		disable_irq(cs40l26->irq);
-		cs40l26_pm_runtime_teardown(cs40l26);
-	}
+	bool re_enable = false;
+	int ret = 0;
 
 	if (cs40l26->revid != CS40L26_REVID_A1 &&
 			cs40l26->revid != CS40L26_REVID_B0) {
 		dev_err(dev, "pseq unrecognized revid: %d\n", cs40l26->revid);
-		ret = -EINVAL;
-		goto defer_err;
+		return -EINVAL;
+	}
+
+	if (cs40l26->fw_loaded) {
+		disable_irq(cs40l26->irq);
+		cs40l26_pm_runtime_teardown(cs40l26);
+		re_enable = true;
 	}
 
 	/* reset pseq END_OF_SCRIPT to location from ROM */
-	pseq_rom_end_of_script_loc = CS40L26_PSEQ_ROM_END_OF_SCRIPT;
-
-	ret = cs40l26_dsp_write(cs40l26, pseq_rom_end_of_script_loc,
+	ret = cs40l26_dsp_write(cs40l26, CS40L26_PSEQ_ROM_END_OF_SCRIPT,
 			CS40L26_PSEQ_OP_END << CS40L26_PSEQ_OP_SHIFT);
 	if (ret) {
 		dev_err(dev, "Failed to reset pseq END_OF_SCRIPT %d\n", ret);
-		goto defer_err;
+		return ret;
 	}
 
 	if (id == CS40L26_FW_CALIB_ID)
@@ -4415,41 +4510,27 @@ int cs40l26_fw_swap(struct cs40l26_private *cs40l26, u32 id)
 
 	ret = cs40l26_fw_upload(cs40l26);
 	if (ret)
-		goto defer_err;
+		return ret;
 
-	if (deferred) {
+	if (cs40l26->fw_defer && cs40l26->fw_loaded) {
 		ret = devm_request_threaded_irq(dev, cs40l26->irq, NULL,
 				cs40l26_irq, IRQF_ONESHOT | IRQF_SHARED |
 				IRQF_TRIGGER_LOW, "cs40l26", cs40l26);
 		if (ret) {
 			dev_err(dev, "Failed to request threaded IRQ: %d\n",
 					ret);
-			goto defer_err;
+			return ret;
 		}
-	} else {
-		enable_irq(cs40l26->irq);
+
+		cs40l26->fw_defer = false;
 	}
 
-	return 0;
-
-defer_err:
-	if (deferred)
-		cs40l26->fw_defer = true;
+	if (re_enable)
+		enable_irq(cs40l26->irq);
 
 	return ret;
 }
 EXPORT_SYMBOL(cs40l26_fw_swap);
-
-static int cs40l26_update_reg_defaults(struct cs40l26_private *cs40l26)
-{
-	int ret;
-
-	ret = regmap_update_bits(cs40l26->regmap, CS40L26_TST_DAC_MSM_CONFIG,
-			CS40L26_SPK_DEFAULT_HIZ_MASK, 1 <<
-			CS40L26_SPK_DEFAULT_HIZ_SHIFT);
-
-	return ret;
-}
 
 static int cs40l26_handle_svc_le_nodes(struct cs40l26_private *cs40l26)
 {
@@ -4542,6 +4623,40 @@ static int cs40l26_handle_svc_le_nodes(struct cs40l26_private *cs40l26)
 
 err:
 	devm_kfree(dev, cs40l26->svc_le_vals);
+	return ret;
+}
+
+static int cs40l26_no_wait_ram_indices_get(struct cs40l26_private *cs40l26,
+		struct device_node *np)
+{
+	int ret, i;
+
+	cs40l26->num_no_wait_ram_indices = of_property_count_u32_elems(np,
+		"cirrus,no-wait-ram-indices");
+
+	if (cs40l26->num_no_wait_ram_indices <= 0)
+		return 0;
+
+	cs40l26->no_wait_ram_indices = devm_kcalloc(cs40l26->dev,
+			cs40l26->num_no_wait_ram_indices, sizeof(u32),
+			GFP_KERNEL);
+	if (!cs40l26->no_wait_ram_indices)
+		return -ENOMEM;
+
+	ret = of_property_read_u32_array(np, "cirrus,no-wait-ram-indices",
+			cs40l26->no_wait_ram_indices,
+			cs40l26->num_no_wait_ram_indices);
+	if (ret)
+		goto err_free;
+
+	for (i = 0; i < cs40l26->num_no_wait_ram_indices; i++)
+		cs40l26->no_wait_ram_indices[i] += CS40L26_RAM_INDEX_START;
+
+	return 0;
+
+err_free:
+	devm_kfree(cs40l26->dev, cs40l26->no_wait_ram_indices);
+	cs40l26->num_no_wait_ram_indices = 0;
 	return ret;
 }
 
@@ -4669,7 +4784,7 @@ static int cs40l26_handle_platform_data(struct cs40l26_private *cs40l26)
 	}
 
 	if (!of_property_read_u32(np, "cirrus,boost-ctl-microvolt", &val))
-		cs40l26->pdata.boost_ctl = val | CS40L26_PDATA_PRESENT;
+		cs40l26->pdata.boost_ctl = val;
 	else
 		cs40l26->pdata.boost_ctl = CS40L26_BST_CTL_DEFAULT;
 
@@ -4723,7 +4838,10 @@ static int cs40l26_handle_platform_data(struct cs40l26_private *cs40l26)
 	else
 		cs40l26->pdata.pwle_zero_cross = false;
 
-	return 0;
+	cs40l26->pdata.press_idx = gpio_map_get(np, CS40L26_GPIO_MAP_A_PRESS);
+	cs40l26->pdata.release_idx = gpio_map_get(np, CS40L26_GPIO_MAP_A_RELEASE);
+
+	return cs40l26_no_wait_ram_indices_get(cs40l26, np);
 }
 
 int cs40l26_probe(struct cs40l26_private *cs40l26,
@@ -4801,23 +4919,26 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 
 	ret = cs40l26_set_pll_loop(cs40l26, CS40L26_PLL_REFCLK_SET_OPEN_LOOP);
 	if (ret)
-		return ret;
+		goto err;
 
-	ret = cs40l26_clear_gpi_event_reg(cs40l26, CS40L26_A1_EVENT_MAP_1);
+	ret = cs40l26_erase_gpi_mapping(cs40l26, CS40L26_GPIO_MAP_A_PRESS);
 	if (ret)
-		return ret;
+		goto err;
 
-	ret = cs40l26_clear_gpi_event_reg(cs40l26, CS40L26_A1_EVENT_MAP_2);
+	ret = cs40l26_erase_gpi_mapping(cs40l26, CS40L26_GPIO_MAP_A_RELEASE);
 	if (ret)
-		return ret;
+		goto err;
 
 	ret = cs40l26_part_num_resolve(cs40l26);
 	if (ret)
 		goto err;
 
-	ret = cs40l26_update_reg_defaults(cs40l26);
+	/* Set LRA to high-z to avoid fault conditions */
+	ret = regmap_update_bits(cs40l26->regmap, CS40L26_TST_DAC_MSM_CONFIG,
+			CS40L26_SPK_DEFAULT_HIZ_MASK, 1 <<
+			CS40L26_SPK_DEFAULT_HIZ_SHIFT);
 	if (ret) {
-		dev_err(dev, "Failed to update reg defaults\n");
+		dev_err(dev, "Failed to set LRA to HI-Z\n");
 		goto err;
 	}
 
@@ -4825,6 +4946,9 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 
 	init_completion(&cs40l26->i2s_cont);
 	init_completion(&cs40l26->erase_cont);
+	init_completion(&cs40l26->cal_f0_cont);
+	init_completion(&cs40l26->cal_redc_cont);
+	init_completion(&cs40l26->cal_dvl_peq_cont);
 
 	if (!cs40l26->fw_defer) {
 		ret = cs40l26_fw_upload(cs40l26);
@@ -4843,6 +4967,8 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 	ret = cs40l26_input_init(cs40l26);
 	if (ret)
 		goto err;
+
+	INIT_LIST_HEAD(&cs40l26->effect_head);
 
 	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_AUTO, cs40l26_devs,
 			CS40L26_NUM_MFD_DEVS, NULL, 0, NULL);
@@ -4904,10 +5030,35 @@ void cs40l26_remove(struct cs40l26_private *cs40l26)
 #endif
 	}
 
+#ifdef CONFIG_DEBUG_FS
+	cs40l26_debugfs_cleanup(cs40l26);
+#endif
+
 	if (cs40l26->input)
 		input_unregister_device(cs40l26->input);
 }
 EXPORT_SYMBOL(cs40l26_remove);
+
+int cs40l26_pm_enter(struct device *dev)
+{
+	int ret;
+
+	ret = pm_runtime_get_sync(dev);
+	if (ret < 0) {
+		cs40l26_resume_error_handle(dev, ret);
+		return ret;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(cs40l26_pm_enter);
+
+void cs40l26_pm_exit(struct device *dev)
+{
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_put_autosuspend(dev);
+}
+EXPORT_SYMBOL(cs40l26_pm_exit);
 
 int cs40l26_suspend(struct device *dev)
 {
@@ -4956,8 +5107,7 @@ void cs40l26_resume_error_handle(struct device *dev, int ret)
 
 	pm_runtime_set_active(dev);
 
-	pm_runtime_mark_last_busy(dev);
-	pm_runtime_put_autosuspend(dev);
+	cs40l26_pm_exit(dev);
 }
 EXPORT_SYMBOL(cs40l26_resume_error_handle);
 
@@ -5006,3 +5156,4 @@ EXPORT_SYMBOL(cs40l26_sys_resume_noirq);
 MODULE_DESCRIPTION("CS40L26 Boosted Mono Class D Amplifier for Haptics");
 MODULE_AUTHOR("Fred Treven, Cirrus Logic Inc. <fred.treven@cirrus.com>");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("6.0.1");
