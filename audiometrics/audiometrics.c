@@ -73,6 +73,9 @@ struct audio_sz_type {
 	uint32_t cca_active;
 	uint32_t cca_enable;
 	uint32_t cca_cs;
+	pdm_callback pdm_cb;
+	uint32_t pdm_number;
+	void* pdm_priv;
 };
 
 struct audiometrics_priv_type {
@@ -469,6 +472,53 @@ static ssize_t cca_rate_read_once_show(struct device *dev,
 	return counts;
 }
 
+/*
+ * Report PDM silence detect on Recording path
+ * Ex: result 0,1,0,0
+ *     means PDM index 2 get silence detected
+ */
+static ssize_t pdm_state_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv;
+	int length, i;
+
+	if (IS_ERR_OR_NULL(dev))
+		return -ENODEV;
+
+	priv = dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(priv))
+		return -ENODEV;
+
+	mutex_lock(&priv->lock);
+	if (IS_ERR_OR_NULL(priv->sz.pdm_cb) ||
+		IS_ERR_OR_NULL(priv->sz.pdm_priv) || priv->sz.pdm_number == 0) {
+		length = -EINVAL;
+		goto err;
+	}
+
+	length = 0;
+	for (i = 0; i < priv->sz.pdm_number; i++)
+		length += scnprintf(buf + length, PAGE_SIZE - length, "%.*s%d", i, ",",
+				priv->sz.pdm_cb(priv->sz.pdm_priv, i));
+err:
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
+void pdm_callback_register(pdm_callback callback, int pdm_total, void* pdm_priv)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(&amcs_pdev->dev);
+
+	mutex_lock(&priv->lock);
+	priv->sz.pdm_cb = callback;
+	priv->sz.pdm_number = pdm_total;
+	priv->sz.pdm_priv = pdm_priv;
+	mutex_unlock(&priv->lock);
+}
+EXPORT_SYMBOL_GPL(pdm_callback_register);
+
 static int amcs_cdev_open(struct inode *inode, struct file *file)
 {
 	struct audiometrics_priv_type *priv = container_of(inode->i_cdev,
@@ -712,6 +762,7 @@ static DEVICE_ATTR_RO(ams_cs);
 static DEVICE_ATTR_RO(ams_rate_read_once);
 static DEVICE_ATTR_RO(cca);
 static DEVICE_ATTR_RO(cca_rate_read_once);
+static DEVICE_ATTR_RO(pdm_state);
 
 
 static struct attribute *audiometrics_fs_attrs[] = {
@@ -729,6 +780,7 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_ams_rate_read_once.attr,
 	&dev_attr_cca.attr,
 	&dev_attr_cca_rate_read_once.attr,
+	&dev_attr_pdm_state.attr,
 	NULL,
 };
 
