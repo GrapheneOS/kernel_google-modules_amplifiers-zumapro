@@ -5,3 +5,10 @@ Contact:	yixuanjiang <yixuanjiang@google.com>
 Description:
 		Reading from this file provides silence detect status of each
 		PDM from AoC recording path
+
+What:		/sys/devices/platform/audiometrics/waves
+Date:		May, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides duration and counts of active waves effect.
