@@ -42,9 +42,9 @@
 #include <sound/soc.h>
 #include <sound/initval.h>
 #include <sound/tlv.h>
+#include <trace/hooks/systrace.h>
 
 #include "cl_dsp.h"
-#include "../../../gs-google/drivers/soc/google/vh/kernel/systrace.h"
 
 #define CS40L26_FIRSTREG				0x0
 #define CS40L26_LASTREG					0x3C7DFE8
