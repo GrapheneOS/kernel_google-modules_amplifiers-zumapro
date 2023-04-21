@@ -1,0 +1,7 @@
+What:		/sys/devices/platform/audiometrics/pdm_state
+Date:		Mar, 2023
+KernelVersion:	5.15
+Contact:	yixuanjiang <yixuanjiang@google.com>
+Description:
+		Reading from this file provides silence detect status of each
+		PDM from AoC recording path

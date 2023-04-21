@@ -213,6 +213,23 @@ int cl_dsp_get_reg(struct cl_dsp *dsp, const char *coeff_name,
 }
 EXPORT_SYMBOL(cl_dsp_get_reg);
 
+bool cl_dsp_algo_is_present(struct cl_dsp *dsp, const unsigned int algo_id)
+{
+	int i;
+
+	if (!dsp)
+		return false;
+
+	for (i = 0; i < dsp->num_algos; i++) {
+		if ((GENMASK(15, 0) & dsp->algo_info[i].id) ==
+						(GENMASK(15, 0) & algo_id))
+			return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL(cl_dsp_algo_is_present);
+
 static int cl_dsp_process_data_be(const u8 *data,
 		const unsigned int num_bytes, unsigned int *val)
 {
@@ -440,7 +457,7 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 		pos += CL_DSP_COEFF_DBLK_HEADER_SIZE;
 
 		data_len = data_block.header.data_len;
-		data_block.payload = kmalloc(data_len, GFP_KERNEL);
+		data_block.payload = kvmalloc(data_len, GFP_KERNEL);
 		if (!data_block.payload)
 			return -ENOMEM;
 
@@ -564,7 +581,7 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 		/* Blocks are word-aligned */
 		pos += (data_len + 3) & ~CL_DSP_ALIGN;
 
-		kfree(data_block.payload);
+		kvfree(data_block.payload);
 	}
 
 	if (wt_found) {
@@ -580,7 +597,7 @@ int cl_dsp_coeff_file_parse(struct cl_dsp *dsp, const struct firmware *fw)
 	return 0;
 
 err_free:
-	kfree(data_block.payload);
+	kvfree(data_block.payload);
 
 	return ret;
 }
@@ -1016,7 +1033,7 @@ int cl_dsp_firmware_parse(struct cl_dsp *dsp, const struct firmware *fw,
 		pos += CL_DSP_DBLK_HEADER_SIZE;
 
 		data_block.payload =
-			kmalloc(data_block.header.data_len, GFP_KERNEL);
+			kvmalloc(data_block.header.data_len, GFP_KERNEL);
 		memcpy(data_block.payload, &fw->data[pos],
 				data_block.header.data_len);
 
@@ -1079,13 +1096,13 @@ int cl_dsp_firmware_parse(struct cl_dsp *dsp, const struct firmware *fw,
 		/* Blocks are word-aligned */
 		pos += (data_block.header.data_len + 3) & ~CL_DSP_ALIGN;
 
-		kfree(data_block.payload);
+		kvfree(data_block.payload);
 	}
 
 	return cl_dsp_coeff_init(dsp);
 
 err_free:
-	kfree(data_block.payload);
+	kvfree(data_block.payload);
 
 	return ret;
 }
@@ -1153,4 +1170,4 @@ EXPORT_SYMBOL(cl_dsp_destroy);
 MODULE_DESCRIPTION("Cirrus Logic DSP Firmware Driver");
 MODULE_AUTHOR("Fred Treven, Cirrus Logic Inc, <fred.treven@cirrus.com>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("3.1.10");
+MODULE_VERSION("3.2.0");
