@@ -28,3 +28,10 @@ Contact:	poomarin <poomarin@google.com>
 Description:
 		Reading from this file provides active duration audio adapted information
 		such as thermal throttling.
+
+What:		/sys/devices/platform/audiometrics/bt_usage
+Date:		Jun, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides active usage of each Bluetooth codec.
