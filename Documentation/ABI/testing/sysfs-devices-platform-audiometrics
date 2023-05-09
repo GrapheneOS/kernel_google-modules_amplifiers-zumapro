@@ -35,3 +35,18 @@ KernelVersion:	5.15
 Contact:	poomarin <poomarin@google.com>
 Description:
 		Reading from this file provides active usage of each Bluetooth codec.
+
+What:		/sys/devices/platform/audiometrics/pcm_latency
+Date:		Jun, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides average latency in milliseconds from PCM
+    usage.
+
+What:		/sys/devices/platform/audiometrics/pcm_count
+Date:		Jun, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides total count of PCM usage.

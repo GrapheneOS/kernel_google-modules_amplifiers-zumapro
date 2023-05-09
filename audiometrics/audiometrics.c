@@ -31,6 +31,7 @@
 #define MAX_WAVES_INSTANCE 5
 #define ADAPTED_INFO_FEATURES_MAX 6
 #define CODEC_MAX_COUNT 5
+#define PCM_TYPE_COUNT_MAX 19
 
 static struct platform_device *amcs_pdev;
 
@@ -84,6 +85,9 @@ struct audio_sz_type {
 	uint32_t adapted_info_active_count_per_day[ADAPTED_INFO_FEATURES_MAX];
 	uint32_t adapted_info_active_duration_ms_per_day[ADAPTED_INFO_FEATURES_MAX];
 	int32_t bt_active_duration[CODEC_MAX_COUNT];
+	int32_t pcm_latency_sum[PCM_TYPE_COUNT_MAX];
+	int32_t pcm_latency_count[PCM_TYPE_COUNT_MAX];
+	int32_t pcm_active_count[PCM_TYPE_COUNT_MAX];
 };
 
 struct audiometrics_priv_type {
@@ -571,6 +575,49 @@ static ssize_t adapted_info_active_count_show(struct device *dev,
 }
 
 /*
+ * Report audio PCM average latency for the past 24 hours.
+ * Ex: result 153 32
+ *   means PCM Type 0 and 1 have average latency 153ms and 32ms respectively.
+ */
+static ssize_t pcm_latency_show(struct device *dev,
+	struct device_attribute *attr, char *buf) {
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i;
+	int32_t avg;
+
+	mutex_lock(&priv->lock);
+	length = 0;
+	for (i = 0; i < PCM_TYPE_COUNT_MAX; i++) {
+		avg = priv->sz.pcm_latency_sum[i] / priv->sz.pcm_latency_count[i];
+		length += sysfs_emit_at(buf, length, "%d ", avg);
+		priv->sz.pcm_latency_sum[i] = 0;
+		priv->sz.pcm_latency_count[i] = 0;
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
+/*
+ * Report audio PCM usage count for the past 24 hours.
+ * Ex: result 50 142
+ *   means PCM Type 0 and 1 has active count of 50 and 142 times respectively.
+ */
+static ssize_t pcm_count_show(struct device *dev, struct device_attribute *attr,
+		char *buf) {
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i;
+
+	mutex_lock(&priv->lock);
+	length = 0;
+	for (i = 0; i < PCM_TYPE_COUNT_MAX; i++) {
+		length += sysfs_emit_at(buf, length, "%d ", priv->sz.pcm_active_count[i]);
+		priv->sz.pcm_active_count[i] = 0;
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
+/*
  * Report Adapted Information such as thermal throttling.
  * Ex: 3200 3029 130 3 500 0
  *     means features 0 to 5 has durations 3200, 3029, 130, 3, 500 and 0
@@ -663,6 +710,7 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 	uint32_t wave_instance, volume_index;
 	uint32_t adapted_info_feature;
 	uint32_t codec;
+	uint32_t pcm_type;
 
 	dev_dbg(priv->device, "%s cmd = 0x%x", __func__, cmd);
 
@@ -866,9 +914,35 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			}
 		break;
 
-		default:
-			dev_warn(priv->device, "%s, unsupported op = %d\n", __func__, params.op);
+		case AMCS_OP_ADD_PCM_LATENCY:
+		ret = 0;
+		pcm_type = params.val[0];
+		if (pcm_type >= PCM_TYPE_COUNT_MAX) {
 			ret = -EINVAL;
+		} else {
+			mutex_lock(&priv->lock);
+			priv->sz.pcm_latency_sum[pcm_type] += params.val[1];
+			priv->sz.pcm_latency_count[pcm_type]++;
+			mutex_unlock(&priv->lock);
+		}
+		break;
+
+		case AMCS_OP_PCM_ACTIVE_COUNT_INCREASE:
+		ret = 0;
+		pcm_type = params.val[0];
+		if (pcm_type >= PCM_TYPE_COUNT_MAX) {
+			ret = -EINVAL;
+		} else {
+			mutex_lock(&priv->lock);
+			priv->sz.pcm_active_count[pcm_type] += params.val[1];
+			mutex_unlock(&priv->lock);
+		}
+		break;
+
+		default:
+		dev_warn(priv->device, "%s, unsupported op = %d\n", __func__,
+					params.op);
+		ret = -EINVAL;
 		break;
 
 		}
@@ -934,7 +1008,8 @@ static DEVICE_ATTR_RO(waves);
 static DEVICE_ATTR_RO(adapted_info_active_count);
 static DEVICE_ATTR_RO(adapted_info_active_duration);
 static DEVICE_ATTR_RO(bt_usage);
-
+static DEVICE_ATTR_RO(pcm_latency);
+static DEVICE_ATTR_RO(pcm_count);
 
 static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_codec_state.attr,
@@ -956,6 +1031,8 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_adapted_info_active_count.attr,
 	&dev_attr_adapted_info_active_duration.attr,
 	&dev_attr_bt_usage.attr,
+	&dev_attr_pcm_latency.attr,
+	&dev_attr_pcm_count.attr,
 	NULL,
 };
 
