@@ -705,11 +705,11 @@ static int cs40l26_handle_mbox_buffer(struct cs40l26_private *cs40l26)
 		if ((val & CS40L26_DSP_MBOX_CMD_INDEX_MASK) ==
 				CS40L26_DSP_MBOX_WATERMARK) {
 			dev_dbg(dev, "Mailbox: WATERMARK\n");
-
+#ifdef CONFIG_DEBUG_FS
 			ret = cl_dsp_logger_update(cs40l26->cl_dsp_db);
 			if (ret)
 				return ret;
-
+#endif
 			continue;
 		}
 
@@ -2483,9 +2483,8 @@ static int cs40l26_owt_comp_data_size(struct cs40l26_private *cs40l26,
 	return size;
 }
 
-static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
-		u32 in_data_nibbles, bool pwle, bool svc_waveform,
-		u8 **out_data)
+static int cs40l26_refactor_owt_composite(struct cs40l26_private *cs40l26, s16 *in_data,
+		u32 in_data_nibbles, u8 **out_data)
 {
 	u8 nsections, global_rep, out_nsections = 0;
 	int ret = 0, pos_byte = 0, in_pos_nib = 2;
@@ -2500,34 +2499,6 @@ static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
 	u16 section_size_bytes;
 	u32 ncw_bytes, wlen;
 	int i;
-
-	if (pwle) {
-		out_data_bytes = CS40L26_WT_HEADER_PWLE_SIZE + in_data_bytes;
-		*out_data = kcalloc(out_data_bytes, sizeof(u8), GFP_KERNEL);
-		if (!*out_data) {
-			dev_err(dev, "No space for refactored data\n");
-			return -ENOMEM;
-		}
-
-		out_ch = cl_dsp_memchunk_create((void *) *out_data,
-					out_data_bytes);
-		cl_dsp_memchunk_write(&out_ch, 16,
-					CS40L26_WT_HEADER_DEFAULT_FLAGS |
-					(svc_waveform ?
-					CS40L26_OWT_SVC_METADATA : 0));
-		cl_dsp_memchunk_write(&out_ch, 8, WT_TYPE_V6_PWLE);
-		cl_dsp_memchunk_write(&out_ch, 24, CS40L26_WT_HEADER_OFFSET +
-					(svc_waveform ?
-					CS40L26_WT_METADATA_OFFSET : 0));
-		cl_dsp_memchunk_write(&out_ch, 24, (in_data_bytes / 4) -
-					(svc_waveform ?
-					CS40L26_WT_METADATA_OFFSET : 0));
-
-
-		memcpy(*out_data + out_ch.bytes, in_data, in_data_bytes);
-
-		return out_data_bytes;
-	}
 
 	ch = cl_dsp_memchunk_create((void *) in_data, in_data_bytes);
 	/* Skip padding */
@@ -2687,8 +2658,10 @@ static int cs40l26_refactor_owt(struct cs40l26_private *cs40l26, s16 *in_data,
 
 	ret = cs40l26_owt_calculate_wlength(cs40l26, out_nsections, global_rep,
 			data, data_bytes, &wlen);
-	if (ret)
+	if (ret) {
+		kfree(out_data);
 		goto data_err_free;
+	}
 
 	cl_dsp_memchunk_write(&out_ch, 24, wlen);
 	cl_dsp_memchunk_write(&out_ch, 8, 0x00); /* Pad */
@@ -2771,9 +2744,6 @@ static int cs40l26_custom_upload(struct cs40l26_private *cs40l26,
 		struct ff_effect *effect,
 		struct cs40l26_uploaded_effect *ueffect)
 {
-	s16 first = cs40l26->raw_custom_data[0];
-	bool is_pwle = (first != CS40L26_WT_TYPE10_COMP_BUFFER);
-	bool is_svc = (first == CS40L26_SVC_ID);
 	struct device *dev = cs40l26->dev;
 	u32 nwaves, min_index, max_index, trigger_index;
 	int ret, data_len, refactored_data_len;
@@ -2783,16 +2753,25 @@ static int cs40l26_custom_upload(struct cs40l26_private *cs40l26,
 	data_len = effect->u.periodic.custom_len;
 
 	if (data_len > CS40L26_CUSTOM_DATA_SIZE) {
-		refactored_data_len = cs40l26_refactor_owt(cs40l26,
-				cs40l26->raw_custom_data, data_len, is_pwle,
-				is_svc, &refactored_data);
-		if (refactored_data_len <= 0) {
-			dev_err(cs40l26->dev, "Failed to refactor OWT\n");
-			return -ENOMEM;
+		if (cs40l26->raw_custom_data[1] == CS40L26_WT_TYPE12_IDENTIFIER) {
+			refactored_data_len = cs40l26->raw_custom_data_len * 2;
+			refactored_data = kcalloc(refactored_data_len, sizeof(u8), GFP_KERNEL);
+			if (!refactored_data) {
+				dev_err(dev, "Failed to allocate space for PWLE\n");
+				return -ENOMEM;
+			}
+
+			memcpy(refactored_data, cs40l26->raw_custom_data, refactored_data_len);
+		} else {
+			refactored_data_len = cs40l26_refactor_owt_composite(cs40l26,
+					cs40l26->raw_custom_data, data_len, &refactored_data);
+			if (refactored_data_len <= 0) {
+				dev_err(dev, "Failed to refactor OWT\n");
+				return -ENOMEM;
+			}
 		}
 
-		ret = cs40l26_owt_upload(cs40l26, refactored_data,
-				refactored_data_len);
+		ret = cs40l26_owt_upload(cs40l26, refactored_data, refactored_data_len);
 		kfree(refactored_data);
 		if (ret)
 			return ret;
@@ -2800,7 +2779,7 @@ static int cs40l26_custom_upload(struct cs40l26_private *cs40l26,
 		bank = (u16) CS40L26_OWT_BANK_ID;
 		index = (u16) cs40l26->num_owt_effects;
 	} else {
-		bank = (u16) first;
+		bank = (u16) cs40l26->raw_custom_data[0];
 		index = (u16) (cs40l26->raw_custom_data[1] &
 				CS40L26_MAX_INDEX_MASK);
 	}
@@ -3249,9 +3228,14 @@ static int cs40l26_part_num_resolve(struct cs40l26_private *cs40l26)
 	}
 
 	val &= CS40L26_REVID_MASK;
-	if (val == CS40L26_REVID_A1 || val == CS40L26_REVID_B0) {
+
+	switch (val) {
+	case CS40L26_REVID_A1:
+	case CS40L26_REVID_B0:
+	case CS40L26_REVID_B1:
 		cs40l26->revid = val;
-	} else {
+		break;
+	default:
 		dev_err(dev, "Invalid device revision: 0x%02X\n", val);
 		return -EINVAL;
 	}
@@ -4220,6 +4204,10 @@ static char **cs40l26_get_tuning_names(struct cs40l26_private *cs40l26,
 			CS40L26_SVC_TUNING_FILE_NAME,
 			CS40L26_TUNING_FILE_NAME_MAX_LEN);
 	}
+	if (cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_LF0T_ALGO_ID))
+		strscpy(coeff_files[file_count++],
+			CS40L26_LF0T_FILE_NAME,
+			CS40L26_TUNING_FILE_NAME_MAX_LEN);
 
 	if (cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_DVL_ALGO_ID))
 		strscpy(coeff_files[file_count++],
@@ -4483,16 +4471,20 @@ int cs40l26_fw_swap(struct cs40l26_private *cs40l26, const u32 id)
 	bool re_enable = false;
 	int ret = 0;
 
-	if (cs40l26->revid != CS40L26_REVID_A1 &&
-			cs40l26->revid != CS40L26_REVID_B0) {
-		dev_err(dev, "pseq unrecognized revid: %d\n", cs40l26->revid);
-		return -EINVAL;
-	}
-
 	if (cs40l26->fw_loaded) {
 		disable_irq(cs40l26->irq);
 		cs40l26_pm_runtime_teardown(cs40l26);
 		re_enable = true;
+	}
+
+	switch (cs40l26->revid) {
+	case CS40L26_REVID_A1:
+	case CS40L26_REVID_B0:
+	case CS40L26_REVID_B1:
+		break;
+	default:
+		dev_err(dev, "pseq unrecognized revid: %d\n", cs40l26->revid);
+		return -EINVAL;
 	}
 
 	/* reset pseq END_OF_SCRIPT to location from ROM */
@@ -5154,6 +5146,13 @@ int cs40l26_sys_resume_noirq(struct device *dev)
 	return 0;
 }
 EXPORT_SYMBOL(cs40l26_sys_resume_noirq);
+
+const struct dev_pm_ops cs40l26_pm_ops = {
+	SET_RUNTIME_PM_OPS(cs40l26_suspend, cs40l26_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(cs40l26_sys_suspend, cs40l26_sys_resume)
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(cs40l26_sys_suspend_noirq, cs40l26_sys_resume_noirq)
+};
+EXPORT_SYMBOL_GPL(cs40l26_pm_ops);
 
 MODULE_DESCRIPTION("CS40L26 Boosted Mono Class D Amplifier for Haptics");
 MODULE_AUTHOR("Fred Treven, Cirrus Logic Inc. <fred.treven@cirrus.com>");
