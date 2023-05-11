@@ -5157,4 +5157,4 @@ EXPORT_SYMBOL_GPL(cs40l26_pm_ops);
 MODULE_DESCRIPTION("CS40L26 Boosted Mono Class D Amplifier for Haptics");
 MODULE_AUTHOR("Fred Treven, Cirrus Logic Inc. <fred.treven@cirrus.com>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("6.0.1");
+MODULE_VERSION("7.0.0");
