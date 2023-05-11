@@ -11,8 +11,9 @@ kernel_module(
         "//private/google-modules/soc/gs:gs_soc_headers",
     ],
     outs = [
-        "cl_dsp.ko",
-        "input-cs40l26-i2c.ko",
+        "cl_dsp-core.ko",
+        "cs40l26-core.ko",
+        "cs40l26-i2c.ko",
         "snd-soc-cs40l26.ko",
     ],
     kernel_build = "//private/google-modules/soc/gs:gs_kernel_build",
