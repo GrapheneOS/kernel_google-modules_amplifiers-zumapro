@@ -5,3 +5,26 @@ Contact:	yixuanjiang <yixuanjiang@google.com>
 Description:
 		Reading from this file provides silence detect status of each
 		PDM from AoC recording path
+
+What:		/sys/devices/platform/audiometrics/waves
+Date:		May, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides duration and counts of active waves effect.
+
+What:		/sys/devices/platform/audiometrics/adapted_info_active_count
+Date:		May, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides active count of the audio adapted information
+		such as thermal throttling.
+
+What:		/sys/devices/platform/audiometrics/adapted_info_active_duration
+Date:		May, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides active duration audio adapted information
+		such as thermal throttling.

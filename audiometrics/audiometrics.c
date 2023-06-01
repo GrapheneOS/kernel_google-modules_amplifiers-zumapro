@@ -27,6 +27,9 @@
 #define AUDIOMETRIC_CH_LENGTH 16
 #define AMCS_MAX_MINOR (1U)
 #define AMCS_CDEV_NAME "amcs"
+#define VOLUME_INDEX_MAX 10
+#define MAX_WAVES_INSTANCE 5
+#define ADAPTED_INFO_FEATURES_MAX 6
 
 static struct platform_device *amcs_pdev;
 
@@ -76,6 +79,9 @@ struct audio_sz_type {
 	pdm_callback pdm_cb;
 	uint32_t pdm_number;
 	void* pdm_priv;
+	int32_t waves_volume_ms_per_day[MAX_WAVES_INSTANCE][VOLUME_INDEX_MAX];
+	uint32_t adapted_info_active_count_per_day[ADAPTED_INFO_FEATURES_MAX];
+	uint32_t adapted_info_active_duration_ms_per_day[ADAPTED_INFO_FEATURES_MAX];
 };
 
 struct audiometrics_priv_type {
@@ -507,6 +513,87 @@ err:
 	return length;
 }
 
+/*
+ * Report Waves Effects duration per volume range index.
+ *
+ * Ex: result 0 2 0 0 0 0 555 0 0 0 0 12345 1 1 0 0 0 0 0 0 0 0 0 12345
+ *
+ *     means instance= usb, active duration 555 milliseconds with volume range
+ *           of [0.4-0.5] and 12345 milliseconds of volume range of [0.9-1.0]
+ *           and instance = speaker, active duration 12345 milliseconds with
+ *           volume range of [0.9-1.0]
+ */
+static ssize_t waves_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i, j;
+
+	mutex_lock(&priv->lock);
+
+	length = 0;
+	for (i = 0; i < MAX_WAVES_INSTANCE; i++) {
+		for(j = 0; j < VOLUME_INDEX_MAX; j++) {
+			length += sysfs_emit_at(
+					buf, length, "%d ", priv->sz.waves_volume_ms_per_day[i][j]);
+			priv->sz.waves_volume_ms_per_day[i][j] = 0;
+		}
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
+/*
+ * Report active count of adapted Information such as thermal throttling.
+ * Ex: 10 5 2 2 1 0
+ *     means features 0 to 5 have count 10, 5, 2, 2, 1 and 0 respectively.
+ */
+static ssize_t adapted_info_active_count_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i;
+
+	mutex_lock(&priv->lock);
+	length = 0;
+	for (i = 0; i < ADAPTED_INFO_FEATURES_MAX; i++) {
+		length += sysfs_emit_at(
+				buf,
+				length,
+				"%d ",
+				priv->sz.adapted_info_active_count_per_day[i]);
+		priv->sz.adapted_info_active_count_per_day[i] = 0;
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
+/*
+ * Report Adapted Information such as thermal throttling.
+ * Ex: 3200 3029 130 3 500 0
+ *     means features 0 to 5 has durations 3200, 3029, 130, 3, 500 and 0
+ *           milliseconds respectively.
+ */
+static ssize_t adapted_info_active_duration_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i;
+
+	mutex_lock(&priv->lock);
+	length = 0;
+	for (i = 0; i < ADAPTED_INFO_FEATURES_MAX; i++) {
+		length += sysfs_emit_at(
+				buf,
+				length,
+				"%d ",
+				priv->sz.adapted_info_active_duration_ms_per_day[i]);
+		priv->sz.adapted_info_active_duration_ms_per_day[i] = 0;
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
 void pdm_callback_register(pdm_callback callback, int pdm_total, void* pdm_priv)
 {
 	struct audiometrics_priv_type *priv = dev_get_drvdata(&amcs_pdev->dev);
@@ -539,6 +626,8 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 	long ret = -EINVAL;
 	int i = 0;
 	struct amcs_params params;
+	uint32_t wave_instance, volume_index;
+	uint32_t adapted_info_feature;
 
 	dev_dbg(priv->device, "%s cmd = 0x%x", __func__, cmd);
 
@@ -699,6 +788,37 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			ret = 0;
 		break;
 
+		case AMCS_OP_WAVES_VOLUME_INCREASE:
+			ret = 0;
+			wave_instance = params.val[0];
+			volume_index = params.val[1];
+			if (wave_instance >= MAX_WAVES_INSTANCE ||
+				volume_index >= VOLUME_INDEX_MAX) {
+				ret = -EINVAL;
+			} else {
+				mutex_lock(&priv->lock);
+				priv->sz.waves_volume_ms_per_day[wave_instance][volume_index] +=
+						params.val[2];
+				mutex_unlock(&priv->lock);
+			}
+
+		break;
+
+		case AMCS_OP_ADAPTED_INFO_FEATURE:
+			ret = 0;
+			adapted_info_feature = params.val[0];
+			if (adapted_info_feature >= AMCS_OP_ADAPTED_INFO_FEATURE) {
+					ret = -EINVAL;
+					break;
+			}
+			mutex_lock(&priv->lock);
+			priv->sz.adapted_info_active_count_per_day[adapted_info_feature] +=
+					params.val[1];
+			priv->sz.adapted_info_active_duration_ms_per_day[adapted_info_feature] +=
+					params.val[2];
+			mutex_unlock(&priv->lock);
+		break;
+
 		default:
 			dev_warn(priv->device, "%s, unsupported op = %d\n", __func__, params.op);
 			ret = -EINVAL;
@@ -763,6 +883,9 @@ static DEVICE_ATTR_RO(ams_rate_read_once);
 static DEVICE_ATTR_RO(cca);
 static DEVICE_ATTR_RO(cca_rate_read_once);
 static DEVICE_ATTR_RO(pdm_state);
+static DEVICE_ATTR_RO(waves);
+static DEVICE_ATTR_RO(adapted_info_active_count);
+static DEVICE_ATTR_RO(adapted_info_active_duration);
 
 
 static struct attribute *audiometrics_fs_attrs[] = {
@@ -781,6 +904,9 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_cca.attr,
 	&dev_attr_cca_rate_read_once.attr,
 	&dev_attr_pdm_state.attr,
+	&dev_attr_waves.attr,
+	&dev_attr_adapted_info_active_count.attr,
+	&dev_attr_adapted_info_active_duration.attr,
 	NULL,
 };
 

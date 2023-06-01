@@ -1170,4 +1170,4 @@ EXPORT_SYMBOL(cl_dsp_destroy);
 MODULE_DESCRIPTION("Cirrus Logic DSP Firmware Driver");
 MODULE_AUTHOR("Fred Treven, Cirrus Logic Inc, <fred.treven@cirrus.com>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("3.2.0");
+MODULE_VERSION("4.0.1");
