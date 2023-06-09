@@ -1071,12 +1071,12 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 
 		case AMCS_OP_BT_ACTIVE_DURATION_INCREASE:
 			ret = 0;
-			codec = params.val[1];
+			codec = params.val[0];
 			if (codec >= CODEC_MAX_COUNT) {
 				ret = -EINVAL;
 			} else {
 				mutex_lock(&priv->lock);
-				priv->sz.bt_active_duration[codec] += params.val[2];
+				priv->sz.bt_active_duration[codec] += params.val[1];
 				mutex_unlock(&priv->lock);
 			}
 		break;
