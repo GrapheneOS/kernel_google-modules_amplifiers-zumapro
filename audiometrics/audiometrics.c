@@ -30,6 +30,7 @@
 #define VOLUME_INDEX_MAX 10
 #define MAX_WAVES_INSTANCE 5
 #define ADAPTED_INFO_FEATURES_MAX 6
+#define CODEC_MAX_COUNT 5
 
 static struct platform_device *amcs_pdev;
 
@@ -82,6 +83,7 @@ struct audio_sz_type {
 	int32_t waves_volume_ms_per_day[MAX_WAVES_INSTANCE][VOLUME_INDEX_MAX];
 	uint32_t adapted_info_active_count_per_day[ADAPTED_INFO_FEATURES_MAX];
 	uint32_t adapted_info_active_duration_ms_per_day[ADAPTED_INFO_FEATURES_MAX];
+	int32_t bt_active_duration[CODEC_MAX_COUNT];
 };
 
 struct audiometrics_priv_type {
@@ -594,6 +596,38 @@ static ssize_t adapted_info_active_duration_show(struct device *dev,
 	return length;
 }
 
+/*
+ * Report BT usage.
+ * Ex: result 10 20 30 40 50
+ *     means Codec index 0 has duration 10 seconds
+ *     and   Codec index 1 has duration 20 seconds
+ *     and   Codec index 2 has duration 30 seconds
+ *     and   Codec index 3 has duration 40 seconds
+ *     and   Codec index 4 has duration 50 seconds
+ */
+static ssize_t bt_usage_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i;
+
+	mutex_lock(&priv->lock);
+	if (IS_ERR_OR_NULL(priv->sz.pdm_cb) ||
+		IS_ERR_OR_NULL(priv->sz.pdm_priv) || priv->sz.pdm_number == 0) {
+		length = -EINVAL;
+		goto err;
+	}
+
+	length = 0;
+	for (i = 0; i < CODEC_MAX_COUNT; i++) {
+		length += sysfs_emit_at(buf, length, "%d ", priv->sz.bt_active_duration[i]);
+		priv->sz.bt_active_duration[i] = 0;
+	}
+err:
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
 void pdm_callback_register(pdm_callback callback, int pdm_total, void* pdm_priv)
 {
 	struct audiometrics_priv_type *priv = dev_get_drvdata(&amcs_pdev->dev);
@@ -628,6 +662,7 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 	struct amcs_params params;
 	uint32_t wave_instance, volume_index;
 	uint32_t adapted_info_feature;
+	uint32_t codec;
 
 	dev_dbg(priv->device, "%s cmd = 0x%x", __func__, cmd);
 
@@ -819,6 +854,18 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			mutex_unlock(&priv->lock);
 		break;
 
+		case AMCS_OP_BT_ACTIVE_DURATION_INCREASE:
+			ret = 0;
+			codec = params.val[1];
+			if (codec >= CODEC_MAX_COUNT) {
+				ret = -EINVAL;
+			} else {
+				mutex_lock(&priv->lock);
+				priv->sz.bt_active_duration[codec] += params.val[2];
+				mutex_unlock(&priv->lock);
+			}
+		break;
+
 		default:
 			dev_warn(priv->device, "%s, unsupported op = %d\n", __func__, params.op);
 			ret = -EINVAL;
@@ -886,6 +933,7 @@ static DEVICE_ATTR_RO(pdm_state);
 static DEVICE_ATTR_RO(waves);
 static DEVICE_ATTR_RO(adapted_info_active_count);
 static DEVICE_ATTR_RO(adapted_info_active_duration);
+static DEVICE_ATTR_RO(bt_usage);
 
 
 static struct attribute *audiometrics_fs_attrs[] = {
@@ -907,6 +955,7 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_waves.attr,
 	&dev_attr_adapted_info_active_count.attr,
 	&dev_attr_adapted_info_active_duration.attr,
+	&dev_attr_bt_usage.attr,
 	NULL,
 };
 
