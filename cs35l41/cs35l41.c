@@ -3138,6 +3138,49 @@ static void cs35l41_component_remove(struct snd_soc_component *component)
 	wm_adsp2_component_remove(&cs35l41->dsp, component);
 }
 
+static int cs35l41_pcm_startup_nop(struct snd_pcm_substream *substream,
+			       struct snd_soc_dai *dai)
+{
+	pr_warn("%s: enter dai->name = %s\n", __func__, dai->name);
+	return 0;
+}
+
+static const struct snd_soc_dai_ops cs35l41_ops_nop = {
+	.startup = cs35l41_pcm_startup_nop,
+};
+
+static struct snd_soc_dai_driver cs35l41_dai_nop[] = {
+	{
+		.name = "cs35l41-pcm",
+		.id = 0,
+		.playback = {
+			.stream_name = "AMP Playback",
+			.channels_min = 1,
+			.channels_max = 2,
+			.rates = SNDRV_PCM_RATE_KNOT,
+			.formats = CS35L41_RX_FORMATS,
+		},
+		.capture = {
+			.stream_name = "AMP Capture",
+			.channels_min = 1,
+			.channels_max = 8,
+			.rates = SNDRV_PCM_RATE_KNOT,
+			.formats = CS35L41_TX_FORMATS,
+		},
+		.ops = &cs35l41_ops_nop,
+		.symmetric_rate = 1,
+	},
+};
+
+static const struct snd_kcontrol_new cs35l41_aud_controls_nop[] = {
+	SOC_SINGLE("AMP Disabled", SND_SOC_NOPM, 0, 0, 0),
+};
+
+static const struct snd_soc_component_driver soc_component_dev_cs35l41_nop = {
+	.controls = cs35l41_aud_controls_nop,
+	.num_controls = ARRAY_SIZE(cs35l41_aud_controls_nop),
+};
+
 static const struct snd_soc_dai_ops cs35l41_ops = {
 	.startup = cs35l41_pcm_startup,
 	.set_fmt = cs35l41_set_dai_fmt,
@@ -4168,6 +4211,17 @@ err_otp:
 	mutex_destroy(&cs35l41->vol_ctl.vol_mutex);
 err:
 	regulator_bulk_disable(cs35l41->num_supplies, cs35l41->supplies);
+
+	/* Register nop dai when probe failed. */
+	if (snd_soc_register_component(cs35l41->dev,
+			&soc_component_dev_cs35l41_nop,
+			cs35l41_dai_nop, ARRAY_SIZE(cs35l41_dai_nop)) < 0) {
+		dev_err(cs35l41->dev, "%s: Register codec failed\n", __func__);
+	} else {
+		dev_info(cs35l41->dev, "%s: Register nop codec\n", __func__);
+		ret = 0;
+	}
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(cs35l41_probe);
