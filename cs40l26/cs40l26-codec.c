@@ -1027,11 +1027,74 @@ static const struct snd_soc_component_driver soc_codec_dev_cs40l26 = {
 	.num_controls = ARRAY_SIZE(cs40l26_controls),
 };
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+static const struct snd_kcontrol_new cs40l26_controls_nop[] = {
+	SOC_SINGLE("HAPTIC Disabled", SND_SOC_NOPM, 0, 0, 0),
+};
+
+static const struct snd_soc_component_driver soc_codec_dev_cs40l26_nop = {
+	.controls = cs40l26_controls_nop,
+	.num_controls = ARRAY_SIZE(cs40l26_controls_nop),
+};
+
+static int cs40l26_startup(struct snd_pcm_substream *substream,
+			       struct snd_soc_dai *dai)
+{
+	pr_warn("%s: enter\n", __func__);
+	return 0;
+}
+
+static const struct snd_soc_dai_ops cs40l26_dai_nop_ops = {
+	.startup = cs40l26_startup,
+};
+
+static struct snd_soc_dai_driver cs40l26_dai_nop[] = {
+	{
+		.name = "cs40l26-pcm",
+		.id = 0,
+		.playback = {
+			.stream_name = "ASP Playback",
+			.channels_min = 1,
+			.channels_max = 2,
+			.rates = CS40L26_RATES,
+			.formats = CS40L26_FORMATS,
+		},
+		.ops = &cs40l26_dai_nop_ops,
+		.symmetric_rate = 1,
+	},
+};
+
+static int cs40l26_codec_register_nop_codec(struct device *dev)
+{
+	int ret;
+	ret = snd_soc_register_component(dev, &soc_codec_dev_cs40l26_nop,
+			cs40l26_dai_nop, ARRAY_SIZE(cs40l26_dai_nop));
+	if (ret < 0)
+		dev_err(dev, "Failed to register codec: %d\n", ret);
+	else
+		dev_info(dev, "Register nop haptic codec\n");
+	return ret;
+}
+
+static int cs40l26_not_probed = false;
+void cs40l26_set_not_probed(void)
+{
+	cs40l26_not_probed = true;
+}
+EXPORT_SYMBOL(cs40l26_set_not_probed);
+#endif
+
 static int cs40l26_codec_driver_probe(struct platform_device *pdev)
 {
 	struct cs40l26_private *cs40l26 = dev_get_drvdata(pdev->dev.parent);
 	struct cs40l26_codec *codec;
 	int ret;
+
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	if (cs40l26_not_probed) {
+		return cs40l26_codec_register_nop_codec(&pdev->dev);
+	}
+#endif
 
 	codec = devm_kzalloc(&pdev->dev, sizeof(struct cs40l26_codec),
 			GFP_KERNEL);

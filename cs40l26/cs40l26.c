@@ -4977,6 +4977,21 @@ err:
 }
 EXPORT_SYMBOL(cs40l26_probe);
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+void cs40l26_add_codec_devices(struct device *dev)
+{
+	int ret;
+	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_AUTO, cs40l26_devs,
+			CS40L26_NUM_MFD_DEVS, NULL, 0, NULL);
+	if (ret) {
+		dev_err(dev, "Failed to register codec component\n");
+	} else {
+		dev_info(dev, "Register codec component\n");
+	}
+}
+EXPORT_SYMBOL(cs40l26_add_codec_devices);
+#endif
+
 void cs40l26_remove(struct cs40l26_private *cs40l26)
 {
 	struct regulator *vp_consumer =

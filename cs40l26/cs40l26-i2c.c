@@ -12,6 +12,10 @@
 
 #include "cs40l26.h"
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+static int cs40l26_probed_retry_count = 2;
+#endif
+
 static const struct i2c_device_id cs40l26_id_i2c[] = {
 	{"cs40l26a", 0},
 	{"cs40l26b", 1},
@@ -57,6 +61,13 @@ static int cs40l26_i2c_probe(struct i2c_client *client,
 #if IS_ENABLED(CONFIG_GOOG_CUST)
 	ret = cs40l26_probe(cs40l26, pdata);
 	if ((ret != 0) && (ret != -ENOMEM)) {
+		if (cs40l26_probed_retry_count-- <= 0) {
+			dev_err(dev, "Failed to probe.\n");
+			cs40l26_set_not_probed();
+			cs40l26_add_codec_devices(dev);
+			return 0;
+		}
+
 		dev_err(dev, "Failed to probe. Try to defer probe: %d\n", ret);
 		ret = -EPROBE_DEFER;
 	}

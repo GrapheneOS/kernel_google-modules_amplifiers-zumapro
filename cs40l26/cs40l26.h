@@ -1636,6 +1636,11 @@ int cs40l26_pseq_write(struct cs40l26_private *cs40l26, u32 addr,
 	u32 data, bool update, u8 op_code);
 int cs40l26_copy_f0_est_to_dvl(struct cs40l26_private *cs40l26);
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+void cs40l26_set_not_probed(void);
+void cs40l26_add_codec_devices(struct device *dev);
+#endif
+
 /* external tables */
 extern struct regulator_bulk_data
 		cs40l26_supplies[CS40L26_NUM_SUPPLIES];
