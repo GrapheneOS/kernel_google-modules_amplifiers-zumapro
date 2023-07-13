@@ -32,6 +32,9 @@
 #define ADAPTED_INFO_FEATURES_MAX 6
 #define CODEC_MAX_COUNT 5
 #define PCM_TYPE_COUNT_MAX 19
+#define VOICE_TYPE_MAX 2
+#define VOICE_DEVICE_RX_TYPE 8
+#define VOICE_NOISE_LEVEL_MAX 12
 
 static struct platform_device *amcs_pdev;
 
@@ -88,6 +91,7 @@ struct audio_sz_type {
 	int32_t pcm_latency_sum[PCM_TYPE_COUNT_MAX];
 	int32_t pcm_latency_count[PCM_TYPE_COUNT_MAX];
 	int32_t pcm_active_count[PCM_TYPE_COUNT_MAX];
+	int32_t voice_noise_duration[VOICE_TYPE_MAX][VOICE_DEVICE_RX_TYPE][VOICE_NOISE_LEVEL_MAX];
 };
 
 struct audiometrics_priv_type {
@@ -675,6 +679,38 @@ err:
 	return length;
 }
 
+/*
+ * Report Voice Info background level duration.
+ * It will always report 192 numbers
+ * Ex: result 1 1 1 40 ... 2
+ *    means voice, receiver, noise level 1, is active 1 second per day.
+ *          voice, receiver, noise level 2, is active 1 second per day.
+ *          voice, receiver, noise level 3, is active 1 second per day.
+ *          voice, receiver, noise level 4, is active 40 seconds per day.
+ *          ...z
+ *          voip, other, noise level 12, is active 2 seconds per day.
+ */
+static ssize_t voice_info_noise_level_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, type, rx, level, duration;
+
+	mutex_lock(&priv->lock);
+	length = 0;
+	for (type = 0; type < VOICE_TYPE_MAX; type++) {
+		for (rx = 0; rx < VOICE_DEVICE_RX_TYPE; rx++) {
+			for (level = 0; level < VOICE_NOISE_LEVEL_MAX; level++) {
+				duration = priv->sz.voice_noise_duration[type][rx][level];
+				length += sysfs_emit_at(buf, length, "%d ", duration);
+				priv->sz.voice_noise_duration[type][rx][level] = 0;
+			}
+		}
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
 void pdm_callback_register(pdm_callback callback, int pdm_total, void* pdm_priv)
 {
 	struct audiometrics_priv_type *priv = dev_get_drvdata(&amcs_pdev->dev);
@@ -711,6 +747,7 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 	uint32_t adapted_info_feature;
 	uint32_t codec;
 	uint32_t pcm_type;
+	uint32_t type, rx, level;
 
 	dev_dbg(priv->device, "%s cmd = 0x%x", __func__, cmd);
 
@@ -939,6 +976,21 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 		}
 		break;
 
+		case AMCS_OP_VOICE_INFO_NOISE_LEVEL:
+			ret = 0;
+			type = params.val[0];
+			rx = params.val[1];
+			level = params.val[2];
+			if (type >= VOICE_TYPE_MAX ||
+					rx >= VOICE_DEVICE_RX_TYPE ||
+					level >= VOICE_NOISE_LEVEL_MAX) {
+				ret = -EINVAL;
+				break;
+			}
+			mutex_lock(&priv->lock);
+			priv->sz.voice_noise_duration[type][rx][level] += params.val[4];
+			mutex_unlock(&priv->lock);
+		break;
 		default:
 		dev_warn(priv->device, "%s, unsupported op = %d\n", __func__,
 					params.op);
@@ -1010,6 +1062,7 @@ static DEVICE_ATTR_RO(adapted_info_active_duration);
 static DEVICE_ATTR_RO(bt_usage);
 static DEVICE_ATTR_RO(pcm_latency);
 static DEVICE_ATTR_RO(pcm_count);
+static DEVICE_ATTR_RO(voice_info_noise_level);
 
 static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_codec_state.attr,
@@ -1033,6 +1086,7 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_bt_usage.attr,
 	&dev_attr_pcm_latency.attr,
 	&dev_attr_pcm_count.attr,
+	&dev_attr_voice_info_noise_level.attr,
 	NULL,
 };
 
