@@ -2,7 +2,6 @@
 #define __TAS256X_DEVICE_
 
 #include "tas256x.h"
-#include <stdbool.h>
 #define DEVICE_TAS2558	0x2558
 #define DEVICE_TAS2562	0x2562
 #define DEVICE_TAS2564	0x2564
