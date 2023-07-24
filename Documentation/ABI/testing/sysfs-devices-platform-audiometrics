@@ -50,3 +50,10 @@ KernelVersion:	5.15
 Contact:	poomarin <poomarin@google.com>
 Description:
 		Reading from this file provides total count of PCM usage.
+
+What:		/sys/devices/platform/audiometrics/voice_info_noise_level
+Date:		Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides noise level duration in seconds.
