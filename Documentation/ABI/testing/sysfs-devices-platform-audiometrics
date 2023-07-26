@@ -73,3 +73,17 @@ Contact:	poomarin <poomarin@google.com>
 Description:
 		Reading from this file provides a duration of offload effects. Each duration
 		Is from a specific effect listed in offload_effects_id_show.
+
+What:		/sys/devices/platform/audiometrics/dsp_record_count
+Date:		Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides a count of dsp record events.
+
+What:		/sys/devices/platform/audiometrics/dsp_record_duration
+Date:		Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides a total duration of the dsp record events.
