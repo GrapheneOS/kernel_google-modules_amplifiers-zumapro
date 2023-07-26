@@ -100,6 +100,8 @@ struct audio_sz_type {
 	int32_t offload_effects_count;
 	int32_t dsp_usage_count[DSP_RECORD_TYPE_COUNT_MAX];
 	int32_t dsp_usage_duration[DSP_RECORD_TYPE_COUNT_MAX];
+	int32_t voice_call_count;
+	int32_t voip_call_count;
 };
 
 struct audiometrics_priv_type {
@@ -825,6 +827,27 @@ static ssize_t dsp_record_duration_show(struct device *dev,
 	return length;
 }
 
+/*
+ * Report call counts including voice-call and VoIP-call.
+ * Ex: result 10 20
+ *
+ *     means there are 10 voice-call and 20 VoIP-call.
+ */
+static ssize_t call_count_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length = 0;
+
+	mutex_lock(&priv->lock);
+	length = sysfs_emit_at(buf, length, "%d %d", priv->sz.voice_call_count,
+			priv->sz.voip_call_count);
+	mutex_unlock(&priv->lock);
+	priv->sz.voice_call_count = 0;
+	priv->sz.voip_call_count = 0;
+	return length;
+}
+
 static int amcs_cdev_open(struct inode *inode, struct file *file)
 {
 	struct audiometrics_priv_type *priv = container_of(inode->i_cdev,
@@ -851,6 +874,7 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 	uint32_t pcm_type;
 	uint32_t type, rx, level;
 	uint32_t record_type;
+	bool is_voice_call;
 	int index;
 
 	dev_dbg(priv->device, "%s cmd = 0x%x", __func__, cmd);
@@ -1146,6 +1170,16 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			}
 			break;
 
+		case AMCS_OP_CALL_COUNT_INCREASE:
+			ret = 0;
+			is_voice_call = params.val[0];
+			if (is_voice_call) {
+				priv->sz.voice_call_count++;
+			} else {
+				priv->sz.voip_call_count++;
+			}
+			break;
+
 		default:
 		dev_warn(priv->device, "%s, unsupported op = %d\n", __func__,
 					params.op);
@@ -1222,6 +1256,7 @@ static DEVICE_ATTR_RO(offload_effects_id);
 static DEVICE_ATTR_RO(offload_effects_duration);
 static DEVICE_ATTR_RO(dsp_record_count);
 static DEVICE_ATTR_RO(dsp_record_duration);
+static DEVICE_ATTR_RO(call_count);
 
 
 static struct attribute *audiometrics_fs_attrs[] = {
@@ -1251,6 +1286,7 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_offload_effects_duration.attr,
 	&dev_attr_dsp_record_count.attr,
 	&dev_attr_dsp_record_duration.attr,
+	&dev_attr_call_count.attr,
 	NULL,
 };
 
