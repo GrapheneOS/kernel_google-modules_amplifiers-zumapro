@@ -102,6 +102,8 @@ struct audio_sz_type {
 	int32_t dsp_usage_duration[DSP_RECORD_TYPE_COUNT_MAX];
 	int32_t voice_call_count;
 	int32_t voip_call_count;
+	int32_t hal_restart_count;
+	int32_t dsp_restart_count;
 };
 
 struct audiometrics_priv_type {
@@ -848,6 +850,27 @@ static ssize_t call_count_show(struct device *dev,
 	return length;
 }
 
+/*
+ * Report audio software restart count.
+ * Ex: result 10 15
+ *   means audio hal restarted 10 times
+ *     and DSP       restarted 15 times in the past day.
+ */
+static ssize_t audio_software_restart_count_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length = 0;
+
+	mutex_lock(&priv->lock);
+	length = sysfs_emit_at(buf, length, "%d %d",
+	    priv->sz.hal_restart_count, priv->sz.dsp_restart_count);
+	priv->sz.hal_restart_count = 0;
+	priv->sz.dsp_restart_count = 0;
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
 static int amcs_cdev_open(struct inode *inode, struct file *file)
 {
 	struct audiometrics_priv_type *priv = container_of(inode->i_cdev,
@@ -1180,6 +1203,14 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			}
 			break;
 
+		case AMCS_OP_SOFTWARE_RESTART_INCREASE:
+			ret = 0;
+			mutex_lock(&priv->lock);
+			priv->sz.hal_restart_count += params.val[0];
+			priv->sz.dsp_restart_count += params.val[1];
+			mutex_unlock(&priv->lock);
+			break;
+
 		default:
 		dev_warn(priv->device, "%s, unsupported op = %d\n", __func__,
 					params.op);
@@ -1257,6 +1288,7 @@ static DEVICE_ATTR_RO(offload_effects_duration);
 static DEVICE_ATTR_RO(dsp_record_count);
 static DEVICE_ATTR_RO(dsp_record_duration);
 static DEVICE_ATTR_RO(call_count);
+static DEVICE_ATTR_RO(audio_software_restart_count);
 
 
 static struct attribute *audiometrics_fs_attrs[] = {
@@ -1287,6 +1319,7 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_dsp_record_count.attr,
 	&dev_attr_dsp_record_duration.attr,
 	&dev_attr_call_count.attr,
+	&dev_attr_audio_software_restart_count.attr,
 	NULL,
 };
 
