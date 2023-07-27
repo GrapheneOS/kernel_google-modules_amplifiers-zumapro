@@ -1630,7 +1630,7 @@ err:
 	return n_result;
 }
 
-static int tas256x_i2c_remove(struct i2c_client *p_client)
+static void tas256x_i2c_remove(struct i2c_client *p_client)
 {
 	int i = 0;
 	struct tas256x_priv *p_tas256x = i2c_get_clientdata(p_client);
@@ -1665,8 +1665,6 @@ static int tas256x_i2c_remove(struct i2c_client *p_client)
 	}
 
 	kfree(p_tas256x->devs);
-
-	return 0;
 }
 
 
