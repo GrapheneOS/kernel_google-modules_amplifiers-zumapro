@@ -35,6 +35,9 @@
 #define VOICE_TYPE_MAX 2
 #define VOICE_DEVICE_RX_TYPE 8
 #define VOICE_NOISE_LEVEL_MAX 12
+#define OFFLOAD_EFFECTS_COUNT_MAX 16
+#define OFFLOAD_EFFECTS_UUID_LENGTH 4
+#define DSP_RECORD_TYPE_COUNT_MAX 20
 
 static struct platform_device *amcs_pdev;
 
@@ -92,6 +95,11 @@ struct audio_sz_type {
 	int32_t pcm_latency_count[PCM_TYPE_COUNT_MAX];
 	int32_t pcm_active_count[PCM_TYPE_COUNT_MAX];
 	int32_t voice_noise_duration[VOICE_TYPE_MAX][VOICE_DEVICE_RX_TYPE][VOICE_NOISE_LEVEL_MAX];
+	int32_t effect_uuid[OFFLOAD_EFFECTS_COUNT_MAX][OFFLOAD_EFFECTS_UUID_LENGTH];
+	int32_t effect_active_seconds_per_day[OFFLOAD_EFFECTS_COUNT_MAX];
+	int32_t offload_effects_count;
+	int32_t dsp_usage_count[DSP_RECORD_TYPE_COUNT_MAX];
+	int32_t dsp_usage_duration[DSP_RECORD_TYPE_COUNT_MAX];
 };
 
 struct audiometrics_priv_type {
@@ -723,6 +731,100 @@ void pdm_callback_register(pdm_callback callback, int pdm_total, void* pdm_priv)
 }
 EXPORT_SYMBOL_GPL(pdm_callback_register);
 
+/*
+ * Report Offload Effects uuid.
+ * Ex: result 1 2 3 4 2 3 4 5
+ *
+ *     means there are two uuids: 1 2 3 4 and 2 3 4 5
+ */
+static ssize_t offload_effects_id_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i, j;
+
+	mutex_lock(&priv->lock);
+	length = 0;
+	for (i = 0; i < OFFLOAD_EFFECTS_COUNT_MAX; i++) {
+		for (j = 0; j < OFFLOAD_EFFECTS_UUID_LENGTH; j++) {
+			length += sysfs_emit_at(buf, length, "%d ",
+					priv->sz.effect_uuid[i][j]);
+			priv->sz.effect_uuid[i][j] = 0;
+		}
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
+/*
+ * Report Offload Effects duration.
+ * Ex: result 10 20
+ *
+ *     means there are two offload effects with duration 10 and 20 seconds.
+ */
+static ssize_t offload_effects_duration_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i;
+
+	mutex_lock(&priv->lock);
+	length = 0;
+	for (i = 0; i < OFFLOAD_EFFECTS_COUNT_MAX; i++) {
+		length += sysfs_emit_at(buf, length, "%d ",
+				priv->sz.effect_active_seconds_per_day[i]);
+		priv->sz.effect_active_seconds_per_day[i] = 0;
+	}
+	priv->sz.offload_effects_count = 0;
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
+
+/*
+ * Report audio DSP Record active count in the past day.
+ * Ex: result 10 24
+ *
+ *   means Record type 0 is active count is 10 times
+ *     and Record type 1 is active count is 24 times
+ */
+static ssize_t dsp_record_count_show(struct device *dev,
+		struct device_attribute *attr, char *buf) {
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i;
+
+	length = 0;
+	mutex_lock(&priv->lock);
+	for (i = 0; i < DSP_RECORD_TYPE_COUNT_MAX; i++) {
+		length += sysfs_emit_at(buf, length, "%d ", priv->sz.dsp_usage_count[i]);
+		priv->sz.dsp_usage_count[i] = 0;
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
+/*
+ * Report audio DSP Record active duration in the past day.
+ * Ex: result 1234 2321
+ *
+ *   means Record type 0 is 1234 seconds in the past day.
+ *     and Record type 1 is 2321 seconds in the past day.
+ */
+static ssize_t dsp_record_duration_show(struct device *dev,
+		struct device_attribute *attr, char *buf) {
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length, i;
+
+	length = 0;
+	mutex_lock(&priv->lock);
+	for (i = 0; i < DSP_RECORD_TYPE_COUNT_MAX; i++) {
+		length += sysfs_emit_at(buf, length, "%d ", priv->sz.dsp_usage_duration[i]);
+		priv->sz.dsp_usage_count[i] = 0;
+	}
+	mutex_unlock(&priv->lock);
+	return length;
+}
+
 static int amcs_cdev_open(struct inode *inode, struct file *file)
 {
 	struct audiometrics_priv_type *priv = container_of(inode->i_cdev,
@@ -748,6 +850,8 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 	uint32_t codec;
 	uint32_t pcm_type;
 	uint32_t type, rx, level;
+	uint32_t record_type;
+	int index;
 
 	dev_dbg(priv->device, "%s cmd = 0x%x", __func__, cmd);
 
@@ -951,6 +1055,32 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			}
 		break;
 
+		case AMCS_OP_OFFLOAD_EFFECT_DURATION:
+			ret = 0;
+			mutex_lock(&priv->lock);
+			for(i = 0; i < priv->sz.offload_effects_count; i++) {
+				if (!memcmp(params.val,
+						priv->sz.effect_uuid[i],
+						sizeof(priv->sz.effect_uuid[i]))) {
+					priv->sz.effect_active_seconds_per_day[i] += params.val[4];
+					mutex_unlock(&priv->lock);
+					return 0;
+				}
+			}
+
+			index = priv->sz.offload_effects_count;
+			if (index >= OFFLOAD_EFFECTS_COUNT_MAX) {
+				ret = -EINVAL;
+			} else {
+				memcpy(priv->sz.effect_uuid[index],
+						params.val, sizeof(priv->sz.effect_uuid[i]));
+				priv->sz.effect_active_seconds_per_day[index] +=
+						params.val[4];
+				priv->sz.offload_effects_count++;
+			}
+			mutex_unlock(&priv->lock);
+			break;
+
 		case AMCS_OP_ADD_PCM_LATENCY:
 		ret = 0;
 		pcm_type = params.val[0];
@@ -991,6 +1121,31 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 			priv->sz.voice_noise_duration[type][rx][level] += params.val[4];
 			mutex_unlock(&priv->lock);
 		break;
+
+		case AMCS_OP_DSP_RECORD_USAGE_DURATION_INCREASE:
+			ret = 0;
+			record_type = params.val[0];
+			if (record_type >= DSP_RECORD_TYPE_COUNT_MAX) {
+				ret = -EINVAL;
+			} else {
+				mutex_lock(&priv->lock);
+				priv->sz.dsp_usage_duration[record_type] += params.val[1];
+				mutex_unlock(&priv->lock);
+			}
+			break;
+
+		case AMCS_OP_DSP_RECORD_USAGE_COUNT_INCREASE:
+			ret = 0;
+			record_type = params.val[0];
+			if (record_type >= DSP_RECORD_TYPE_COUNT_MAX) {
+				ret = -EINVAL;
+			} else {
+				mutex_lock(&priv->lock);
+				priv->sz.dsp_usage_count[record_type] += params.val[1];
+				mutex_unlock(&priv->lock);
+			}
+			break;
+
 		default:
 		dev_warn(priv->device, "%s, unsupported op = %d\n", __func__,
 					params.op);
@@ -1063,6 +1218,11 @@ static DEVICE_ATTR_RO(bt_usage);
 static DEVICE_ATTR_RO(pcm_latency);
 static DEVICE_ATTR_RO(pcm_count);
 static DEVICE_ATTR_RO(voice_info_noise_level);
+static DEVICE_ATTR_RO(offload_effects_id);
+static DEVICE_ATTR_RO(offload_effects_duration);
+static DEVICE_ATTR_RO(dsp_record_count);
+static DEVICE_ATTR_RO(dsp_record_duration);
+
 
 static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_codec_state.attr,
@@ -1087,6 +1247,10 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_pcm_latency.attr,
 	&dev_attr_pcm_count.attr,
 	&dev_attr_voice_info_noise_level.attr,
+	&dev_attr_offload_effects_id.attr,
+	&dev_attr_offload_effects_duration.attr,
+	&dev_attr_dsp_record_count.attr,
+	&dev_attr_dsp_record_duration.attr,
 	NULL,
 };
 
