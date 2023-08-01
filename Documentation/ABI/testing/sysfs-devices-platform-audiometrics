@@ -50,3 +50,40 @@ KernelVersion:	5.15
 Contact:	poomarin <poomarin@google.com>
 Description:
 		Reading from this file provides total count of PCM usage.
+
+What:		/sys/devices/platform/audiometrics/voice_info_noise_level
+Date:		Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides noise level duration in seconds.
+
+What:		/sys/devices/platform/audiometrics/offload_effects_id_show
+Date:		Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides offload effects id. This value is associated
+		with offload_effects_duration_show file.
+
+What:		/sys/devices/platform/audiometrics/offload_effects_duration_show
+Date:		Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides a duration of offload effects. Each duration
+		Is from a specific effect listed in offload_effects_id_show.
+
+What:		/sys/devices/platform/audiometrics/dsp_record_count
+Date:		Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides a count of dsp record events.
+
+What:		/sys/devices/platform/audiometrics/dsp_record_duration
+Date:		Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides a total duration of the dsp record events.
