@@ -41,6 +41,7 @@ struct cs35l41_platform_data {
 	bool invert_pcm;
 	bool hibernate_enable;
 	bool fwname_use_revid;
+	enum cs35l41_shared_boost shared_boost;
 	int bst_ind;
 	int bst_vctrl;
 	int bst_ipk;
@@ -104,7 +105,6 @@ struct cs35l41_private {
 	int sclk_fmt;
 	int amp_hibernate;
 	bool reload_tuning;
-	bool dspa_mode;
 	bool i2s_mode;
 	bool swire_mode;
 	bool halo_booted;
@@ -115,6 +115,8 @@ struct cs35l41_private {
 	bool hibernate_force_wake;
 	bool asprx1_enabled;
 	bool asprx2_enabled;
+	bool speaker_port_blocked;
+	u32 speaker_open_short_status;
 	/* GPIO for /RST */
 	struct gpio_desc *reset_gpio;
 	/* Run-time mixer */
@@ -126,16 +128,17 @@ struct cs35l41_private {
 	struct mutex hb_lock;
 	struct mutex hb_forcewake_lock;
 	struct cs35l41_rst_cache reset_cache;
-	struct mutex rate_lock;
 	struct mutex force_int_lock;
 	struct cs35l41_vol_ctl vol_ctl;
 	unsigned int ctl_cache[CS35L41_CTRL_CACHE_SIZE];
 	u32 trim_cache[CS35L41_TRIM_CACHE_SIZE];
 	const char *dt_name;
+	unsigned int gpi_global_en;
+	bool enabled;
 };
 
 int cs35l41_probe(struct cs35l41_private *cs35l41,
 				struct cs35l41_platform_data *pdata);
-int cs35l41_remove(struct cs35l41_private *cs35l41);
+void cs35l41_remove(struct cs35l41_private *cs35l41);
 
 #endif /* __CS35L41_H */

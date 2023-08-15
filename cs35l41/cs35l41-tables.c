@@ -152,6 +152,9 @@ bool cs35l41_readable_reg(struct device *dev, unsigned int reg)
 	case CS35L41_PROTECT_REL_ERR_IGN:
 	case CS35L41_GPIO_PAD_CONTROL:
 	case CS35L41_JTAG_CONTROL:
+	case CS35L41_PWRMGT_CTL:
+	case CS35L41_WAKESRC_CTL:
+	case CS35L41_PWRMGT_STS:
 	case CS35L41_PLL_CLK_CTRL:
 	case CS35L41_DSP_CLK_CTRL:
 	case CS35L41_GLOBAL_CLK_CTRL:
@@ -622,7 +625,9 @@ bool cs35l41_volatile_reg(struct device *dev, unsigned int reg)
 	case CS35L41_SFT_RESET:
 	case CS35L41_FABID:
 	case CS35L41_REVID:
+	case CS35L41_PWR_CTRL1:
 	case CS35L41_DTEMP_EN:
+	case CS35L41_PWRMGT_STS:
 	case CS35L41_IRQ1_STATUS:
 	case CS35L41_IRQ1_STATUS1:
 	case CS35L41_IRQ1_STATUS2:
