@@ -10,7 +10,11 @@
 // it under the terms of the GNU General Public License version 2 as
 // published by the Free Software Foundation.
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
 #include "cs40l26.h"
+#else
+#include <linux/mfd/cs40l26.h>
+#endif
 
 static const struct spi_device_id cs40l26_id_spi[] = {
 	{"cs40l26a", 0},
@@ -32,12 +36,10 @@ MODULE_DEVICE_TABLE(of, cs40l26_of_match);
 
 static int cs40l26_spi_probe(struct spi_device *spi)
 {
-	int ret;
 	struct cs40l26_private *cs40l26;
-	struct device *dev = &spi->dev;
-	struct cs40l26_platform_data *pdata = dev_get_platdata(&spi->dev);
+	int error;
 
-	cs40l26 = devm_kzalloc(dev, sizeof(struct cs40l26_private), GFP_KERNEL);
+	cs40l26 = devm_kzalloc(&spi->dev, sizeof(struct cs40l26_private), GFP_KERNEL);
 	if (!cs40l26)
 		return -ENOMEM;
 
@@ -45,22 +47,22 @@ static int cs40l26_spi_probe(struct spi_device *spi)
 
 	cs40l26->regmap = devm_regmap_init_spi(spi, &cs40l26_regmap);
 	if (IS_ERR(cs40l26->regmap)) {
-		ret = PTR_ERR(cs40l26->regmap);
-		dev_err(dev, "Failed to allocate register map: %d\n", ret);
-		return ret;
+		error = PTR_ERR(cs40l26->regmap);
+		dev_err(&spi->dev, "Failed to allocate register map: %d\n", error);
+		return error;
 	}
 
-	cs40l26->dev = dev;
+	cs40l26->dev = &spi->dev;
 	cs40l26->irq = spi->irq;
 
-	return cs40l26_probe(cs40l26, pdata);
+	return cs40l26_probe(cs40l26);
 }
 
-static int cs40l26_spi_remove(struct spi_device *spi)
+static void cs40l26_spi_remove(struct spi_device *spi)
 {
 	struct cs40l26_private *cs40l26 = spi_get_drvdata(spi);
 
-	return cs40l26_remove(cs40l26);
+	cs40l26_remove(cs40l26);
 }
 
 static struct spi_driver cs40l26_spi_driver = {
