@@ -38,6 +38,8 @@
 #define OFFLOAD_EFFECTS_COUNT_MAX 16
 #define OFFLOAD_EFFECTS_UUID_LENGTH 4
 #define DSP_RECORD_TYPE_COUNT_MAX 20
+#define CCA_SOURCE_MAX 2
+#define CCA_SOURCE_VOICE 1
 
 static struct platform_device *amcs_pdev;
 
@@ -81,9 +83,9 @@ struct audio_sz_type {
 	uint32_t mic_broken_degrade;
 	uint32_t ams_count;
 	uint32_t cs_count;
-	uint32_t cca_active;
-	uint32_t cca_enable;
-	uint32_t cca_cs;
+	uint32_t cca_active[CCA_SOURCE_MAX];
+	uint32_t cca_enable[CCA_SOURCE_MAX];
+	uint32_t cca_cs[CCA_SOURCE_MAX];
 	pdm_callback pdm_cb;
 	uint32_t pdm_number;
 	void* pdm_priv;
@@ -442,62 +444,33 @@ static ssize_t ams_rate_read_once_show(struct device *dev,
 static ssize_t cca_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct audiometrics_priv_type *priv;
-	int counts;
-
-	if (IS_ERR_OR_NULL(dev))
-		return -ENODEV;
-
-	priv = dev_get_drvdata(dev);
-
-	if (IS_ERR_OR_NULL(priv))
-		return -ENODEV;
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int length;
 
 	mutex_lock(&priv->lock);
-	counts = scnprintf(buf, PAGE_SIZE, "%u,%u,%u", priv->sz.cca_active,
-		priv->sz.cca_enable, priv->sz.cca_cs);
+	length = sysfs_emit_at(buf, 0, "%u %u %u ", priv->sz.cca_active[CCA_SOURCE_VOICE],
+			priv->sz.cca_enable[CCA_SOURCE_VOICE], priv->sz.cca_cs[CCA_SOURCE_VOICE]);
 	mutex_unlock(&priv->lock);
 
-	return counts;
+	return length;
 }
 
-static ssize_t cca_rate_read_once_show(struct device *dev,
+static ssize_t cca_count_read_once_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct audiometrics_priv_type *priv;
-	int counts;
-	uint rate_active = 0, rate_enable = 0;
-	const int scale = 100;
-
-
-	if (IS_ERR_OR_NULL(dev))
-		return -ENODEV;
-
-	priv = dev_get_drvdata(dev);
-
-	if (IS_ERR_OR_NULL(priv))
-		return -ENODEV;
+	struct audiometrics_priv_type *priv = dev_get_drvdata(dev);
+	int i, length;
 
 	mutex_lock(&priv->lock);
-
-	if (priv->sz.cca_cs) {
-		rate_active = (priv->sz.cca_active * scale / priv->sz.cca_cs);
-		rate_enable = (priv->sz.cca_enable * scale / priv->sz.cca_cs);
+	length = 0;
+	for (i = 0; i < CCA_SOURCE_MAX; i++) {
+		length += sysfs_emit_at(buf, length, "%u %u ", priv->sz.cca_active[i],
+				priv->sz.cca_enable[i]);
+		priv->sz.cca_active[i] = 0;
+		priv->sz.cca_enable[i] = 0;
 	}
-
-	if (rate_active > scale) {
-		rate_active = scale;
-		rate_enable = scale;
-	}
-
-	counts = scnprintf(buf, PAGE_SIZE, "%u,%u", rate_active, rate_enable);
-
-	priv->sz.cca_active = 0;
-	priv->sz.cca_enable = 0;
-	priv->sz.cca_cs = 0;
-
 	mutex_unlock(&priv->lock);
-	return counts;
+	return length;
 }
 
 /*
@@ -897,6 +870,7 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 	uint32_t pcm_type;
 	uint32_t type, rx, level;
 	uint32_t record_type;
+	uint32_t cca_source;
 	bool is_voice_call;
 	int index;
 
@@ -1032,13 +1006,13 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 		case AMCS_OP_CCA:
 			mutex_lock(&priv->lock);
 			if (params.val[0] == AMCS_OP2_GET) {
-				params.val[1] =	priv->sz.cca_active;
-				params.val[2] =	priv->sz.cca_enable;
-				params.val[3] =	priv->sz.cca_cs;
+				params.val[1] =	priv->sz.cca_active[CCA_SOURCE_VOICE];
+				params.val[2] =	priv->sz.cca_enable[CCA_SOURCE_VOICE];
+				params.val[3] =	priv->sz.cca_cs[CCA_SOURCE_VOICE];
 			} else if (params.val[0] == AMCS_OP2_SET) {
-				priv->sz.cca_active = params.val[1];
-				priv->sz.cca_enable = params.val[2];
-				priv->sz.cca_cs = params.val[3];
+				priv->sz.cca_active[CCA_SOURCE_VOICE] = params.val[1];
+				priv->sz.cca_enable[CCA_SOURCE_VOICE] = params.val[2];
+				priv->sz.cca_cs[CCA_SOURCE_VOICE] = params.val[3];
 			}
 			mutex_unlock(&priv->lock);
 
@@ -1049,15 +1023,20 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 		break;
 
 		case AMCS_OP_CCA_INCREASE:
-			mutex_lock(&priv->lock);
-			if (params.val[0] == AMCS_OP2_SET) {
-				priv->sz.cca_active += params.val[1];
-				priv->sz.cca_enable += params.val[2];
-				priv->sz.cca_cs += params.val[3];
-			}
-			mutex_unlock(&priv->lock);
 			ret = 0;
-		break;
+			if (params.val[0] == AMCS_OP2_SET) {
+				cca_source = params.val[4];
+				if (cca_source >= CCA_SOURCE_MAX) {
+					ret = -EINVAL;
+				} else {
+					mutex_lock(&priv->lock);
+					priv->sz.cca_active[cca_source] += params.val[1];
+					priv->sz.cca_enable[cca_source] += params.val[2];
+					priv->sz.cca_cs[cca_source] += params.val[3];
+					mutex_unlock(&priv->lock);
+				}
+			}
+			break;
 
 		case AMCS_OP_WAVES_VOLUME_INCREASE:
 			ret = 0;
@@ -1092,12 +1071,12 @@ static long amcs_cdev_unlocked_ioctl(struct file *file, unsigned int cmd, unsign
 
 		case AMCS_OP_BT_ACTIVE_DURATION_INCREASE:
 			ret = 0;
-			codec = params.val[1];
+			codec = params.val[0];
 			if (codec >= CODEC_MAX_COUNT) {
 				ret = -EINVAL;
 			} else {
 				mutex_lock(&priv->lock);
-				priv->sz.bt_active_duration[codec] += params.val[2];
+				priv->sz.bt_active_duration[codec] += params.val[1];
 				mutex_unlock(&priv->lock);
 			}
 		break;
@@ -1274,7 +1253,7 @@ static DEVICE_ATTR_RO(codec_crashed_counter);
 static DEVICE_ATTR_RO(ams_cs);
 static DEVICE_ATTR_RO(ams_rate_read_once);
 static DEVICE_ATTR_RO(cca);
-static DEVICE_ATTR_RO(cca_rate_read_once);
+static DEVICE_ATTR_RO(cca_count_read_once);
 static DEVICE_ATTR_RO(pdm_state);
 static DEVICE_ATTR_RO(waves);
 static DEVICE_ATTR_RO(adapted_info_active_count);
@@ -1305,7 +1284,7 @@ static struct attribute *audiometrics_fs_attrs[] = {
 	&dev_attr_ams_cs.attr,
 	&dev_attr_ams_rate_read_once.attr,
 	&dev_attr_cca.attr,
-	&dev_attr_cca_rate_read_once.attr,
+	&dev_attr_cca_count_read_once.attr,
 	&dev_attr_pdm_state.attr,
 	&dev_attr_waves.attr,
 	&dev_attr_adapted_info_active_count.attr,
