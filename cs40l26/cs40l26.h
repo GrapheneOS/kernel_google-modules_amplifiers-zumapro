@@ -635,6 +635,10 @@
 #define CS40L26_SPK_DEFAULT_HIZ_SHIFT 28
 
 /* Device */
+#ifdef CONFIG_GOOG_CUST
+#define CS40L26_MAX_DEVICES		2
+#define CS40L26_MAX_PROBE_RETRY		2
+#endif
 #define CS40L26_DEV_NAME		"CS40L26"
 #define CS40L26_INPUT_DEV_NAME		"cs40l26_input"
 #define CS40L26_DEVID_A			0x40A260
@@ -1568,6 +1572,10 @@ struct cs40l26_private {
 	bool dbg_fw_ym;
 	struct cl_dsp_debugfs *cl_dsp_db;
 #endif
+#ifdef CONFIG_GOOG_CUST
+	bool cs40l26_not_probed;
+	u8 device_id;
+#endif
 };
 
 struct cs40l26_codec {
@@ -1637,7 +1645,7 @@ int cs40l26_pseq_write(struct cs40l26_private *cs40l26, u32 addr,
 int cs40l26_copy_f0_est_to_dvl(struct cs40l26_private *cs40l26);
 
 #if IS_ENABLED(CONFIG_GOOG_CUST)
-void cs40l26_set_not_probed(void);
+static int cs40l26_probed_retry_count[CS40L26_MAX_DEVICES];
 void cs40l26_add_codec_devices(struct device *dev);
 #endif
 

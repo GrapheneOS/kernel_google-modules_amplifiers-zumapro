@@ -1076,12 +1076,6 @@ static int cs40l26_codec_register_nop_codec(struct device *dev)
 	return ret;
 }
 
-static int cs40l26_not_probed = false;
-void cs40l26_set_not_probed(void)
-{
-	cs40l26_not_probed = true;
-}
-EXPORT_SYMBOL(cs40l26_set_not_probed);
 #endif
 
 static int cs40l26_codec_driver_probe(struct platform_device *pdev)
@@ -1091,7 +1085,7 @@ static int cs40l26_codec_driver_probe(struct platform_device *pdev)
 	int ret;
 
 #if IS_ENABLED(CONFIG_GOOG_CUST)
-	if (cs40l26_not_probed) {
+	if (cs40l26->cs40l26_not_probed) {
 		return cs40l26_codec_register_nop_codec(&pdev->dev);
 	}
 #endif

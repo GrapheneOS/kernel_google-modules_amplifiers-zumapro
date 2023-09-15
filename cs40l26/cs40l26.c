@@ -4836,6 +4836,25 @@ static int cs40l26_handle_platform_data(struct cs40l26_private *cs40l26)
 	return cs40l26_no_wait_ram_indices_get(cs40l26, np);
 }
 
+#ifdef CONFIG_GOOG_CUST
+static int cs40l26_parse_device_id(struct cs40l26_private *cs40l26) {
+	struct device *dev = cs40l26->dev;
+	int error;
+
+	error = device_property_read_u8(dev, "input-device-id",
+				&cs40l26->device_id);
+	if(error)
+		dev_warn(dev, "device_id not set. Defaulting to 0!\n");
+
+	if(cs40l26->device_id >= CS40L26_MAX_DEVICES) {
+		dev_err(dev, "device_id(%d) cannot be more than %d",
+			cs40l26->device_id, CS40L26_MAX_DEVICES);
+		return -EINVAL;
+	}
+	return 0;
+}
+#endif
+
 int cs40l26_probe(struct cs40l26_private *cs40l26,
 		struct cs40l26_platform_data *pdata)
 {
@@ -4843,6 +4862,11 @@ int cs40l26_probe(struct cs40l26_private *cs40l26,
 	int ret;
 
 	mutex_init(&cs40l26->lock);
+#ifdef CONFIG_GOOG_CUST
+	ret = cs40l26_parse_device_id(cs40l26);
+	if(ret)
+		goto err;
+#endif
 
 	cs40l26->vibe_workqueue = alloc_ordered_workqueue("vibe_workqueue",
 			WQ_HIGHPRI);
