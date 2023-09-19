@@ -1,13 +1,12 @@
-// SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
-/*
- * cs35l45-i2c.c -- CS35L45 I2C driver
- *
- * Copyright 2019 Cirrus Logic, Inc.
- *
- * Author: James Schulman <james.schulman@cirrus.com>
- *
- */
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+//
+// cs35l45-i2c.c -- CS35L45 I2C driver
+//
+// Copyright 2019-2022 Cirrus Logic, Inc.
+//
+// Author: James Schulman <james.schulman@cirrus.com>
 
+#include <linux/device.h>
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/regulator/consumer.h>
@@ -51,17 +50,17 @@ static int cs35l45_i2c_probe(struct i2c_client *client,
 		return ret;
 	}
 
-	usleep_range(2000, 2100);
-
 	ret = cs35l45_initialize(cs35l45);
 	if (ret < 0) {
 		dev_err(dev, "Failed device initialization: %d\n", ret);
+		if (ret == -ENOTCONN) {
+			ret = -EPROBE_DEFER;
+			dev_err(dev, "Defer probe on ENOTCONN error\n");
+		}
 		goto fail;
-
 	}
 
 	return 0;
-
 fail:
 	cs35l45_remove(cs35l45);
 	return ret;
@@ -75,13 +74,13 @@ static void cs35l45_i2c_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id cs35l45_of_match[] = {
-	{.compatible = "cirrus,cs35l45"},
+	{ .compatible = "cirrus,cs35l45" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, cs35l45_of_match);
 
 static const struct i2c_device_id cs35l45_id_i2c[] = {
-	{"cs35l45", 0},
+	{ "cs35l45", 0 },
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, cs35l45_id_i2c);
@@ -90,6 +89,7 @@ static struct i2c_driver cs35l45_i2c_driver = {
 	.driver = {
 		.name		= "cs35l45",
 		.of_match_table = cs35l45_of_match,
+		.pm = &cs35l45_pm_ops,
 	},
 	.id_table	= cs35l45_id_i2c,
 	.probe		= cs35l45_i2c_probe,

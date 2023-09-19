@@ -1,6 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config SND_SOC_CS35L45_CS_DSP
+	tristate
+	default n
+
 config SND_SOC_CS35L45
         tristate "Cirrus Logic CS35L45 CODEC"
-        select SND_SOC_WM_ADSP
+        select SND_SOC_CS35L45_WM_ADSP
 
 config SND_SOC_CS35L45_SPI
 	tristate "Cirrus Logic CS35L45 CODEC (SPI)"
