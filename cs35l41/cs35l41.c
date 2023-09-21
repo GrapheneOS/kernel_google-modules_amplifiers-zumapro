@@ -2165,8 +2165,7 @@ static int cs35l41_hibernate(struct snd_soc_dapm_widget *w,
 	dev_info(cs35l41->dev, "%s event 0x%x hibernate state %d\n",
 		__func__, event, cs35l41->amp_hibernate);
 	if (!cs35l41->dsp.running ||
-	     cs35l41->amp_hibernate == CS35L41_HIBERNATE_INCOMPATIBLE ||
-	     cs35l41->hibernate_force_wake)
+	     cs35l41->amp_hibernate == CS35L41_HIBERNATE_INCOMPATIBLE)
 		return 0;
 
 	switch (event) {
