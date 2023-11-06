@@ -371,18 +371,19 @@ static DEVICE_ATTR_RO(die_temp);
 static ssize_t num_waves_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	u32 nwaves;
-	int error;
+	int error, nwaves;
 
 	error = cs40l26_pm_enter(cs40l26->dev);
 	if (error)
 		return error;
 
-	error = cs40l26_get_num_waves(cs40l26, &nwaves);
-	if (error)
+	nwaves = cs40l26_num_waves(cs40l26);
+	if (nwaves < 0) {
+		error = nwaves;
 		goto err_pm;
+	}
 
-	error = snprintf(buf, PAGE_SIZE, "%u\n", nwaves);
+	error = snprintf(buf, PAGE_SIZE, "%d\n", nwaves);
 
 err_pm:
 	cs40l26_pm_exit(cs40l26->dev);
@@ -390,71 +391,6 @@ err_pm:
 	return error;
 }
 static DEVICE_ATTR_RO(num_waves);
-
-/* boost_disable_delay is in units of 125us, e.g. 8 ->  1ms */
-static ssize_t boost_disable_delay_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	u32 reg, boost_disable_delay;
-	int error;
-
-	error = cs40l26_pm_enter(cs40l26->dev);
-	if (error)
-		return error;
-
-	error = cl_dsp_get_reg(cs40l26->dsp, "BOOST_DISABLE_DELAY",
-			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
-	if (error)
-		goto err_pm;
-
-	error = regmap_read(cs40l26->regmap, reg, &boost_disable_delay);
-	if (error)
-		goto err_pm;
-
-	error = snprintf(buf, PAGE_SIZE, "%d\n", boost_disable_delay);
-
-err_pm:
-	cs40l26_pm_exit(cs40l26->dev);
-
-	return error;
-}
-
-static ssize_t boost_disable_delay_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	u32 reg, boost_disable_delay;
-	int error;
-
-	dev_dbg(cs40l26->dev, "%s: %s", __func__, buf);
-
-	error = kstrtou32(buf, 10, &boost_disable_delay);
-
-	if (error || boost_disable_delay < CS40L26_BOOST_DISABLE_DELAY_MIN ||
-			boost_disable_delay > CS40L26_BOOST_DISABLE_DELAY_MAX)
-		return -EINVAL;
-
-	error = cs40l26_pm_enter(cs40l26->dev);
-	if (error)
-		return error;
-
-	error = cl_dsp_get_reg(cs40l26->dsp, "BOOST_DISABLE_DELAY",
-			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
-	if (error)
-		goto err_pm;
-
-	error = regmap_write(cs40l26->regmap, reg, boost_disable_delay);
-
-err_pm:
-	cs40l26_pm_exit(cs40l26->dev);
-
-	if (error)
-		return error;
-	else
-		return count;
-}
-static DEVICE_ATTR_RW(boost_disable_delay);
 
 static ssize_t f0_offset_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -765,7 +701,6 @@ static struct attribute *cs40l26_dev_attrs[] = {
 	&dev_attr_pm_stdby_timeout_ms.attr,
 	&dev_attr_pm_active_timeout_ms.attr,
 	&dev_attr_vibe_state.attr,
-	&dev_attr_boost_disable_delay.attr,
 	&dev_attr_f0_offset.attr,
 	&dev_attr_delay_before_stop_playback_us.attr,
 	&dev_attr_f0_comp_enable.attr,
@@ -776,290 +711,9 @@ static struct attribute *cs40l26_dev_attrs[] = {
 	NULL,
 };
 
-struct attribute_group cs40l26_dev_attr_group = {
+static struct attribute_group cs40l26_dev_attr_group = {
 	.name = "default",
 	.attrs = cs40l26_dev_attrs,
-};
-
-static ssize_t dbc_enable_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	u32 val, reg;
-	int error;
-
-	error = cs40l26_pm_enter(cs40l26->dev);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = cl_dsp_get_reg(cs40l26->dsp, "FLAGS", CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID,
-			&reg);
-	if (error)
-		goto err_pm;
-
-	error = regmap_read(cs40l26->regmap, reg, &val);
-	if (error) {
-		dev_err(cs40l26->dev, "Failed to get FLAGS\n");
-		goto err_pm;
-	}
-
-
-	val &= CS40L26_DBC_ENABLE_MASK;
-	val >>= CS40L26_DBC_ENABLE_SHIFT;
-
-	error = snprintf(buf, PAGE_SIZE, "%u\n", val);
-
-err_pm:
-	mutex_unlock(&cs40l26->lock);
-
-	cs40l26_pm_exit(cs40l26->dev);
-
-	return error;
-}
-
-static ssize_t dbc_enable_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	int error;
-	u32 val;
-
-	error = kstrtou32(buf, 10, &val);
-	if (error)
-		return error;
-
-	if (val > 1)
-		return -EINVAL;
-
-	error = cs40l26_pm_enter(cs40l26->dev);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = cs40l26_dbc_enable(cs40l26, val);
-
-	mutex_unlock(&cs40l26->lock);
-
-	cs40l26_pm_exit(cs40l26->dev);
-
-	return error ? error : count;
-}
-static DEVICE_ATTR_RW(dbc_enable);
-
-static ssize_t dbc_env_rel_coef_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	unsigned int val;
-	int error;
-
-	error = cs40l26_dbc_get(cs40l26, CS40L26_DBC_ENV_REL_COEF, &val);
-
-	return error ? error : snprintf(buf, PAGE_SIZE, "%u\n", val);
-}
-
-static ssize_t dbc_env_rel_coef_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	struct device *cdev = cs40l26->dev;
-	u32 val;
-	int error;
-
-	error = kstrtou32(buf, 10, &val);
-	if (error)
-		return error;
-
-	error = cs40l26_pm_enter(cdev);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = cs40l26_dbc_set(cs40l26, CS40L26_DBC_ENV_REL_COEF, val);
-
-	mutex_unlock(&cs40l26->lock);
-
-	cs40l26_pm_exit(cdev);
-
-	return error ? error : count;
-}
-static DEVICE_ATTR_RW(dbc_env_rel_coef);
-
-static ssize_t dbc_rise_headroom_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	unsigned int val;
-	int error;
-
-	error = cs40l26_dbc_get(cs40l26, CS40L26_DBC_RISE_HEADROOM, &val);
-
-	return error ? error : snprintf(buf, PAGE_SIZE, "%u\n", val);
-}
-
-static ssize_t dbc_rise_headroom_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	struct device *cdev = cs40l26->dev;
-	u32 val;
-	int error;
-
-	error = kstrtou32(buf, 10, &val);
-	if (error)
-		return error;
-
-	error = cs40l26_pm_enter(cdev);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = cs40l26_dbc_set(cs40l26, CS40L26_DBC_RISE_HEADROOM, val);
-
-	mutex_unlock(&cs40l26->lock);
-
-	cs40l26_pm_exit(cdev);
-
-	return error ? error : count;
-}
-static DEVICE_ATTR_RW(dbc_rise_headroom);
-
-static ssize_t dbc_fall_headroom_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	unsigned int val;
-	int error;
-
-	error = cs40l26_dbc_get(cs40l26, CS40L26_DBC_FALL_HEADROOM, &val);
-
-	return error ? error : snprintf(buf, PAGE_SIZE, "%u\n", val);
-}
-
-static ssize_t dbc_fall_headroom_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	struct device *cdev = cs40l26->dev;
-	u32 val;
-	int error;
-
-	error = kstrtou32(buf, 10, &val);
-	if (error)
-		return error;
-
-	error = cs40l26_pm_enter(cdev);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = cs40l26_dbc_set(cs40l26, CS40L26_DBC_FALL_HEADROOM, val);
-
-	mutex_unlock(&cs40l26->lock);
-
-	cs40l26_pm_exit(cdev);
-
-	return error ? error : count;
-}
-static DEVICE_ATTR_RW(dbc_fall_headroom);
-
-static ssize_t dbc_tx_lvl_thresh_fs_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	unsigned int val;
-	int error;
-
-	error = cs40l26_dbc_get(cs40l26, CS40L26_DBC_TX_LVL_THRESH_FS, &val);
-
-	return error ? error : snprintf(buf, PAGE_SIZE, "%u\n", val);
-}
-
-static ssize_t dbc_tx_lvl_thresh_fs_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	struct device *cdev = cs40l26->dev;
-	u32 val;
-	int error;
-
-	error = kstrtou32(buf, 10, &val);
-	if (error)
-		return error;
-
-	error = cs40l26_pm_enter(cdev);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = cs40l26_dbc_set(cs40l26, CS40L26_DBC_TX_LVL_THRESH_FS, val);
-
-	mutex_unlock(&cs40l26->lock);
-
-	cs40l26_pm_exit(cdev);
-
-	return error ? error : count;
-}
-static DEVICE_ATTR_RW(dbc_tx_lvl_thresh_fs);
-
-static ssize_t dbc_tx_lvl_hold_off_ms_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	unsigned int val;
-	int error;
-
-	error = cs40l26_dbc_get(cs40l26, CS40L26_DBC_TX_LVL_HOLD_OFF_MS, &val);
-
-	return error ? error : snprintf(buf, PAGE_SIZE, "%u\n", val);
-}
-
-static ssize_t dbc_tx_lvl_hold_off_ms_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	struct device *cdev = cs40l26->dev;
-	u32 val;
-	int error;
-
-	error = kstrtou32(buf, 10, &val);
-	if (error)
-		return error;
-
-	error = cs40l26_pm_enter(cdev);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = cs40l26_dbc_set(cs40l26, CS40L26_DBC_TX_LVL_HOLD_OFF_MS, val);
-
-	mutex_unlock(&cs40l26->lock);
-
-	cs40l26_pm_exit(cdev);
-
-	return error ? error : count;
-}
-static DEVICE_ATTR_RW(dbc_tx_lvl_hold_off_ms);
-
-static struct attribute *cs40l26_dev_attrs_dbc[] = {
-	&dev_attr_dbc_enable.attr,
-	&dev_attr_dbc_env_rel_coef.attr,
-	&dev_attr_dbc_rise_headroom.attr,
-	&dev_attr_dbc_fall_headroom.attr,
-	&dev_attr_dbc_tx_lvl_thresh_fs.attr,
-	&dev_attr_dbc_tx_lvl_hold_off_ms.attr,
-	NULL,
-};
-
-struct attribute_group cs40l26_dev_attr_dbc_group = {
-	.name = "dbc",
-	.attrs = cs40l26_dev_attrs_dbc,
 };
 
 static ssize_t trigger_calibration_store(struct device *dev,
@@ -1861,6 +1515,90 @@ err_free:
 }
 static DEVICE_ATTR_RW(dvl_peq_coefficients);
 
+static ssize_t svc_le_est_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	unsigned int le;
+	int error;
+
+	error = cs40l26_pm_enter(cs40l26->dev);
+	if (error)
+		return error;
+
+	mutex_lock(&cs40l26->lock);
+
+	error = cs40l26_svc_le_estimate(cs40l26, &le);
+
+	mutex_unlock(&cs40l26->lock);
+
+	cs40l26_pm_exit(cs40l26->dev);
+
+	if (error)
+		return error;
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", le);
+}
+static DEVICE_ATTR_RO(svc_le_est);
+
+static ssize_t svc_le_stored_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	int error;
+
+	mutex_lock(&cs40l26->lock);
+
+	error = snprintf(buf, PAGE_SIZE, "%d\n", cs40l26->svc_le_est_stored);
+
+	mutex_unlock(&cs40l26->lock);
+
+	return error;
+}
+
+static ssize_t svc_le_stored_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	u32 svc_le_stored;
+	int error;
+
+	error = kstrtou32(buf, 10, &svc_le_stored);
+	if (error)
+		return error;
+
+	mutex_lock(&cs40l26->lock);
+
+	cs40l26->svc_le_est_stored = svc_le_stored;
+
+	mutex_unlock(&cs40l26->lock);
+
+	return count;
+}
+static DEVICE_ATTR_RW(svc_le_stored);
+
+static struct attribute *cs40l26_dev_attrs_cal[] = {
+	&dev_attr_svc_le_est.attr,
+	&dev_attr_svc_le_stored.attr,
+	&dev_attr_trigger_calibration.attr,
+	&dev_attr_f0_measured.attr,
+	&dev_attr_q_measured.attr,
+	&dev_attr_redc_measured.attr,
+	&dev_attr_dvl_peq_coefficients.attr,
+	&dev_attr_redc_est.attr,
+	&dev_attr_f0_stored.attr,
+	&dev_attr_q_stored.attr,
+	&dev_attr_redc_stored.attr,
+	&dev_attr_freq_centre.attr,
+	&dev_attr_freq_span.attr,
+	&dev_attr_f0_and_q_cal_time_ms.attr,
+	&dev_attr_redc_cal_time_ms.attr,
+	NULL,
+};
+
+static struct attribute_group cs40l26_dev_attr_cal_group = {
+	.name = "calibration",
+	.attrs = cs40l26_dev_attrs_cal,
+};
+
 static ssize_t logging_en_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
@@ -1949,6 +1687,37 @@ static ssize_t logging_max_reset_store(struct device *dev,
 }
 static DEVICE_ATTR_WO(logging_max_reset);
 
+static ssize_t available_logger_srcs_show(struct device *dev, struct device_attribute *attr,
+		char *buf)
+{
+	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
+	char log_srcs[20] = "";
+	int i;
+
+	for (i = 0; i < cs40l26->num_log_srcs; i++) {
+		switch (cs40l26->log_srcs[i].id) {
+		case CS40L26_LOGGER_SRC_ID_BEMF:
+			strncat(log_srcs, "BEMF\n", 5);
+			break;
+		case CS40L26_LOGGER_SRC_ID_VBST:
+			strncat(log_srcs, "VBST\n", 5);
+			break;
+		case CS40L26_LOGGER_SRC_ID_VMON:
+			strncat(log_srcs, "VMON\n", 5);
+			break;
+		case CS40L26_LOGGER_SRC_ID_EP:
+			strncat(log_srcs, "EP\n", 3);
+			break;
+		default:
+			dev_err(cs40l26->dev, "Invalid source ID %d\n", cs40l26->log_srcs[i].id);
+			return -EINVAL;
+		}
+	}
+
+	return snprintf(buf, PAGE_SIZE, "%s", log_srcs);
+}
+static DEVICE_ATTR_RO(available_logger_srcs);
+
 static int cs40l26_logger_max_get(struct cs40l26_private *cs40l26, u32 src_id, u32 *max)
 {
 	int error, reg, src_num;
@@ -1966,7 +1735,7 @@ static int cs40l26_logger_max_get(struct cs40l26_private *cs40l26, u32 src_id, u
 	}
 
 	if (src_num == cs40l26->num_log_srcs) {
-		error = -ENODEV;
+		error = -ENODATA;
 		goto err_mutex;
 	}
 
@@ -2035,92 +1804,25 @@ static ssize_t max_excursion_show(struct device *dev, struct device_attribute *a
 }
 static DEVICE_ATTR_RO(max_excursion);
 
-static ssize_t svc_le_est_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	unsigned int le;
-	int error;
-
-	error = cs40l26_pm_enter(cs40l26->dev);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = cs40l26_svc_le_estimate(cs40l26, &le);
-
-	mutex_unlock(&cs40l26->lock);
-
-	cs40l26_pm_exit(cs40l26->dev);
-
-	if (error)
-		return error;
-
-	return snprintf(buf, PAGE_SIZE, "%u\n", le);
-}
-static DEVICE_ATTR_RO(svc_le_est);
-
-static ssize_t svc_le_stored_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	int error;
-
-	mutex_lock(&cs40l26->lock);
-
-	error = snprintf(buf, PAGE_SIZE, "%d\n", cs40l26->svc_le_est_stored);
-
-	mutex_unlock(&cs40l26->lock);
-
-	return error;
-}
-
-static ssize_t svc_le_stored_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct cs40l26_private *cs40l26 = dev_get_drvdata(dev);
-	u32 svc_le_stored;
-	int error;
-
-	error = kstrtou32(buf, 10, &svc_le_stored);
-	if (error)
-		return error;
-
-	mutex_lock(&cs40l26->lock);
-
-	cs40l26->svc_le_est_stored = svc_le_stored;
-
-	mutex_unlock(&cs40l26->lock);
-
-	return count;
-}
-static DEVICE_ATTR_RW(svc_le_stored);
-
-static struct attribute *cs40l26_dev_attrs_cal[] = {
-	&dev_attr_svc_le_est.attr,
-	&dev_attr_svc_le_stored.attr,
-	&dev_attr_max_vbst.attr,
+static struct attribute *cs40l26_dev_attrs_dlog[] = {
+	&dev_attr_logging_en.attr,
+	&dev_attr_logging_max_reset.attr,
+	&dev_attr_available_logger_srcs.attr,
 	&dev_attr_max_bemf.attr,
+	&dev_attr_max_vbst.attr,
 	&dev_attr_max_vmon.attr,
 	&dev_attr_max_excursion.attr,
-	&dev_attr_logging_max_reset.attr,
-	&dev_attr_logging_en.attr,
-	&dev_attr_trigger_calibration.attr,
-	&dev_attr_f0_measured.attr,
-	&dev_attr_q_measured.attr,
-	&dev_attr_redc_measured.attr,
-	&dev_attr_dvl_peq_coefficients.attr,
-	&dev_attr_redc_est.attr,
-	&dev_attr_f0_stored.attr,
-	&dev_attr_q_stored.attr,
-	&dev_attr_redc_stored.attr,
-	&dev_attr_freq_centre.attr,
-	&dev_attr_freq_span.attr,
-	&dev_attr_f0_and_q_cal_time_ms.attr,
-	&dev_attr_redc_cal_time_ms.attr,
 	NULL,
 };
 
-struct attribute_group cs40l26_dev_attr_cal_group = {
-	.name = "calibration",
-	.attrs = cs40l26_dev_attrs_cal,
+static struct attribute_group cs40l26_dev_attr_dlog_group = {
+	.name = "data_logger",
+	.attrs = cs40l26_dev_attrs_dlog,
+};
+
+const struct attribute_group *cs40l26_attr_groups[] = {
+	&cs40l26_dev_attr_group,
+	&cs40l26_dev_attr_cal_group,
+	&cs40l26_dev_attr_dlog_group,
+	NULL,
 };

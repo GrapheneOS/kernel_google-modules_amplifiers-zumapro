@@ -45,7 +45,6 @@ properties:
 
   cirrus,vbbr-thld-uv:
     $ref: /schemas/types.yaml#/definitions/uint32
-    multipleOf: 55000
     minimum: 109000
     maximum: 3445000
     default: 273000
@@ -53,6 +52,8 @@ properties:
       Boost converter brownout prevention delta voltage threshold
       Brownout prevention mode is entered if the condition
       "VBST(target) - VBST(actual) <= VBBR_THLD" is met.
+      Values accepted by the hardware register are in steps of
+      55000 microvolts starting from the minimum.
 
   cirrus,vbbr-max-att-db:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -136,13 +137,14 @@ properties:
 
   cirrus,vpbr-thld-uv:
     $ref: /schemas/types.yaml#/definitions/uint32
-    multipleOf: 47000
     minimum: 2497000
     maximum: 3874000
     default: 2639000
     description:
       Battery voltage (VP) brownout prevention threshold.
       Brownout prevention mode is entered if VP falls below VPBR_THLD.
+      Values accepted by the hardware register are in steps of
+      47000 microvolts starting from the minimum.
 
   cirrus,vpbr-max-att-db:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -319,6 +321,8 @@ properties:
     type: boolean
     description:
       Enable Dynamic Boost Control automatically after firmware is loaded.
+      Settings for DBC from the devicetree will not be used if "cs40l26-dbc.bin"
+      is loaded as a tuning file.
 
   cirrus,dbc-env-rel-coef:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -329,6 +333,8 @@ properties:
       Envelope release time represented as a scaling coefficient; Q0.23 format.
       See Cirrus Logic release notes for more information on how to program
       this parameter.
+      Settings for DBC from the devicetree will not be used if "cs40l26-dbc.bin"
+      is loaded as a tuning file.
 
   cirrus,dbc-fall-headroom:
     $ref: "/schemas/types.yaml#/definitions/uint32"
@@ -339,6 +345,8 @@ properties:
       Headroom for falling envelope in Dynamic Boost Control. Value is a ratio
       of full-scale (12.3 V) and is in Q0.23 format. To program a headroom of x
       Volts, the following formula is used. (x/12.3) * 2^(23).
+      Settings for DBC from the devicetree will not be used if "cs40l26-dbc.bin"
+      is loaded as a tuning file.
 
   cirrus,dbc-rise-headroom:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -349,6 +357,8 @@ properties:
       Headroom for rising envelope in Dynamic Boost Control. Value is a ratio
       of full-scale (12.3 V) and is in Q0.23 format. To program a headroom of x
       Volts, the following formula is used. (x/12.3) * 2^(23).
+      Settings for DBC from the devicetree will not be used if "cs40l26-dbc.bin"
+      is loaded as a tuning file.
 
   cirrus,dbc-tx-lvl-hold-off-ms:
     minimum: 0
@@ -359,6 +369,8 @@ properties:
       (TX_LVL_THRESH, programmed via dbc-tx-lvl-thresh-fs). The algorithm
       registers this as silence. The signal rising back to the threshold will
       trigger an immediate rise to the max boost level.
+      Settings for DBC from the devicetree will not be used if "cs40l26-dbc.bin"
+      is loaded as a tuning file.
 
   cirrus,dbc-tx-lvl-thresh-fs:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -372,6 +384,8 @@ properties:
       The value must be provided as a percentage of full scale and is in Q0.23
       format. To program a threshold of x dBFs use the following formula.
       10^(x/20) * 2^(23).
+      Settings for DBC from the devicetree will not be used if "cs40l26-dbc.bin"
+      is loaded as a tuning file.
 
   cirrus,pwle-zero-cross-en:
     type: boolean
@@ -470,6 +484,52 @@ properties:
       6: 500 ms
       7: 1000 ms
 
+  cirrus,aux-ng-enable:
+    type: boolean
+    description:
+      Configures whether the auxiliary noise gating detection
+      is enabled.
+
+  cirrus,aux-ng-thld:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [0, 1, 2, 3, 4, 5, 6, 7]
+    default: 3
+    description: |
+      Auxiliary noise gate threshold at which noise gating activates:
+      0: -66 dBFS
+      1: -72 dBFS
+      2: -78 dBFS
+      3: -84 dBFS
+      4: -90 dBFS
+      5: -96 dBFS
+      6: -102 dBFS
+      7: -108 dBFS
+
+  cirrus,aux-ng-delay:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    default: 3
+    description: |
+      Amplifier noise gate entry delay. Time that the signal must
+      be below the configured threshold prior to entering a noise
+      gated state:
+      0: 5 ms
+      1: 10 ms
+      2: 25 ms
+      3: 50 ms
+      4: 100 ms
+      5: 250 ms
+      6: 500 ms
+      7: 1000 ms
+      8: 5000 ms
+      9: 10000 ms
+      10: 20000 ms
+      11: 30000 ms
+      12: 40000 ms
+      13: 50000 ms
+      14: 60000 ms
+      15: 120000 ms
+
 required:
   - compatible
   - reg
@@ -561,6 +621,13 @@ examples:
         cirrus,vpbr-wait = <3>;
         cirrus,vpbr-rel-rate = <4>;
 
+        cirrus,dbc-enable;
+        cirrus,dbc-env-rel-coef = <8000000>;
+        cirrus,dbc-fall-headroom = <7000000>;
+        cirrus,dbc-rise-headroom = <6000000>;
+        cirrus,dbc-tx-lvl-hold-off-ms = <50>;
+        cirrus,dbc-tx-lvl-thresh-fs = <900>;
+
         cirrus,bst-dcm-en;
 
         cirrus,bst-ipk-microamp = <4550000>;
@@ -579,6 +646,10 @@ examples:
         cirrus,ng-enable;
         cirrus,ng-thld = <4>;
         cirrus,ng-delay = <2>;
+
+        cirrus,aux-ng-enable;
+        cirrus,aux-ng-thld = <1>;
+        cirrus,aux-ng-delay = <14>;
 
         svc-le1 {
           cirrus,min = <671>;
