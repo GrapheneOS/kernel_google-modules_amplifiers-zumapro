@@ -4,7 +4,11 @@
 //
 // Copyright 2022 Cirrus Logic. Inc.
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+#include "cs40l26.h"
+#else
 #include <linux/mfd/cs40l26.h>
+#endif
 
 static const struct cs40l26_pll_sysclk_config cs40l26_pll_sysclk[] = {
 	{CS40L26_PLL_CLK_FRQ_32768, CS40L26_PLL_CLK_CFG_32768},
@@ -80,7 +84,11 @@ static int cs40l26_clk_en(struct snd_soc_dapm_widget *w, struct snd_kcontrol *kc
 	struct device *dev = cs40l26->dev;
 	int error;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	dev_info(dev, "%s: %s\n", __func__, event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#else
 	dev_dbg(dev, "%s: %s\n", __func__, event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#endif
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
@@ -186,7 +194,11 @@ static int cs40l26_asp_rx(struct snd_soc_dapm_widget *w, struct snd_kcontrol *kc
 	u8 data_src;
 	int error;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	dev_info(dev, "%s: %s\n", __func__, event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#else
 	dev_dbg(dev, "%s: %s\n", __func__, event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#endif
 
 	mutex_lock(&cs40l26->lock);
 
@@ -585,6 +597,40 @@ static int cs40l26_a2h_level_put(struct snd_kcontrol *kcontrol, struct snd_ctl_e
 	return error;
 }
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+static int cs40l26_slots_get(
+	struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
+{
+	struct cs40l26_codec *codec = snd_soc_component_get_drvdata(
+		snd_soc_kcontrol_component(kcontrol));
+
+	dev_dbg(codec->dev, "%s: 0: %ld->%d, 1: %ld->%d\n", __func__,
+		ucontrol->value.integer.value[0], codec->tdm_slot[0],
+		ucontrol->value.integer.value[1], codec->tdm_slot[1]);
+
+	ucontrol->value.integer.value[0] = codec->tdm_slot[0];
+	ucontrol->value.integer.value[1] = codec->tdm_slot[1];
+
+	return 0;
+}
+
+static int cs40l26_slots_put(
+	struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
+{
+	struct cs40l26_codec *codec = snd_soc_component_get_drvdata(
+		snd_soc_kcontrol_component(kcontrol));
+
+	dev_dbg(codec->dev, "%s: 0: %d->%ld, 1: %d->%ld\n", __func__,
+		codec->tdm_slot[0], ucontrol->value.integer.value[0],
+		codec->tdm_slot[1], ucontrol->value.integer.value[1]);
+
+	codec->tdm_slot[0] = ucontrol->value.integer.value[0];
+	codec->tdm_slot[1] = ucontrol->value.integer.value[1];
+
+	return 0;
+}
+#endif
+
 static int cs40l26_a2h_delay_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
 	struct cs40l26_codec *codec =
@@ -745,6 +791,10 @@ static const struct snd_kcontrol_new cs40l26_controls[] = {
 			cs40l26_a2h_delay_put),
 	SOC_SINGLE_EXT("Boost Disable Delay", 0, 0, CS40L26_BOOST_DISABLE_DELAY_MAX, 0,
 			cs40l26_boost_disable_delay_get, cs40l26_boost_disable_delay_put),
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	SOC_DOUBLE_EXT("RX Slots", 0, 0, 1, 63, 0, cs40l26_slots_get,
+			cs40l26_slots_put),
+#endif
 };
 
 static const char * const cs40l26_out_mux_texts[] = { "Off", "PCM", "A2H" };
@@ -920,6 +970,7 @@ err_pm:
 	return error;
 }
 
+#if !IS_ENABLED(CONFIG_GOOG_CUST)
 static int cs40l26_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
 		unsigned int rx_mask, int slots, int slot_width)
 {
@@ -940,12 +991,21 @@ static int cs40l26_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
 	rx_mask &= ~(1 << codec->tdm_slot[0]);
 	codec->tdm_slot[1] = ffs(rx_mask) - 1;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	dev_dbg(codec->dev,
+		"%s: tx_mask:0x%X, rx_mask:0x%X, slots:%d, slot_width:%d, "
+		"slot#0: %d, slot#1: %d\n", __func__, tx_mask, rx_mask, slots,
+		slot_width, codec->tdm_slot[0], codec->tdm_slot[1]);
+#endif
 	return 0;
 }
+#endif
 
 static const struct snd_soc_dai_ops cs40l26_dai_ops = {
 	.set_fmt = cs40l26_set_dai_fmt,
+#if !IS_ENABLED(CONFIG_GOOG_CUST)
 	.set_tdm_slot = cs40l26_set_tdm_slot,
+#endif
 	.hw_params = cs40l26_pcm_hw_params,
 };
 
@@ -979,8 +1039,13 @@ static int cs40l26_codec_probe(struct snd_soc_component *component)
 	/* Default audio SCLK frequency */
 	codec->sysclk_rate = CS40L26_PLL_CLK_FRQ_1536000;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	codec->tdm_slot[0] = 2;
+	codec->tdm_slot[1] = 3;
+#else
 	codec->tdm_slot[0] = 0;
 	codec->tdm_slot[1] = 1;
+#endif
 
 	return 0;
 }
@@ -997,11 +1062,68 @@ static const struct snd_soc_component_driver soc_codec_dev_cs40l26 = {
 	.num_controls = ARRAY_SIZE(cs40l26_controls),
 };
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+static const struct snd_kcontrol_new cs40l26_controls_nop[] = {
+	SOC_SINGLE("HAPTIC Disabled", SND_SOC_NOPM, 0, 0, 0),
+};
+
+static const struct snd_soc_component_driver soc_codec_dev_cs40l26_nop = {
+	.controls = cs40l26_controls_nop,
+	.num_controls = ARRAY_SIZE(cs40l26_controls_nop),
+};
+
+static int cs40l26_startup(struct snd_pcm_substream *substream,
+			       struct snd_soc_dai *dai)
+{
+	pr_warn("%s: enter\n", __func__);
+	return 0;
+}
+
+static const struct snd_soc_dai_ops cs40l26_dai_nop_ops = {
+	.startup = cs40l26_startup,
+};
+
+static struct snd_soc_dai_driver cs40l26_dai_nop[] = {
+	{
+		.name = "cs40l26-pcm",
+		.id = 0,
+		.playback = {
+			.stream_name = "ASP Playback",
+			.channels_min = 1,
+			.channels_max = 2,
+			.rates = CS40L26_RATES,
+			.formats = CS40L26_FORMATS,
+		},
+		.ops = &cs40l26_dai_nop_ops,
+		.symmetric_rate = 1,
+	},
+};
+
+static int cs40l26_codec_register_nop_codec(struct device *dev)
+{
+	int ret;
+	ret = snd_soc_register_component(dev, &soc_codec_dev_cs40l26_nop,
+			cs40l26_dai_nop, ARRAY_SIZE(cs40l26_dai_nop));
+	if (ret < 0)
+		dev_err(dev, "Failed to register codec: %d\n", ret);
+	else
+		dev_info(dev, "Register nop haptic codec\n");
+	return ret;
+}
+
+#endif
+
 static int cs40l26_codec_driver_probe(struct platform_device *pdev)
 {
 	struct cs40l26_private *cs40l26 = dev_get_drvdata(pdev->dev.parent);
 	struct cs40l26_codec *codec;
 	int error;
+
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	if (cs40l26->cs40l26_not_probed) {
+		return cs40l26_codec_register_nop_codec(&pdev->dev);
+	}
+#endif
 
 	codec = devm_kzalloc(&pdev->dev, sizeof(struct cs40l26_codec), GFP_KERNEL);
 	if (!codec)

@@ -11,7 +11,11 @@
 // it under the terms of the GNU General Public License version 2 as
 // published by the Free Software Foundation.
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+#include "cs40l26.h"
+#else
 #include <linux/mfd/cs40l26.h>
+#endif
 
 #ifdef CONFIG_DEBUG_FS
 static ssize_t cs40l26_fw_ctrl_name_read(struct file *file, char __user *user_buf, size_t count,
