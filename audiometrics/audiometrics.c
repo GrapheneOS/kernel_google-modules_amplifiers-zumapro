@@ -89,13 +89,11 @@ struct audiometrics_priv_type {
 
 static void amcs_report_mic_uevent(uint32_t mic_state, struct audiometrics_priv_type *priv)
 {
-	char event[25] = "";
+	char event[25];
 	char *env[] = { event, NULL };
 
-	uint8_t mic_break =
-		mic_state & MIC_BREAK_STAT_MIC_BREAK_MASK;
-	uint8_t mic_degrade =
-		mic_state & MIC_BREAK_STAT_MIC_DEGRADE_MASK >> MIC_DEGRADE_SHIFT_BITS;
+	uint8_t mic_break = FIELD_GET(MIC_BREAK_STAT_MIC_BREAK_MASK, mic_state);
+	uint8_t mic_degrade = FIELD_GET(MIC_BREAK_STAT_MIC_DEGRADE_MASK, mic_state);
 
 	if (IS_ERR_OR_NULL(priv))
 		return;
