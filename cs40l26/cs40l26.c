@@ -400,6 +400,7 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26, enum cs40l26_pm
 {
 	struct device *dev = cs40l26->dev;
 	u32 cmd, he_time_cmd, he_time_cmd_payload;
+	ktime_t time_since_allow_hibernate;
 	u8 curr_state;
 	bool dsp_lock;
 	int error, i;
@@ -448,11 +449,16 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26, enum cs40l26_pm
 			 * command to provide input to thermal model
 			 */
 			if (timer_pending(&cs40l26->hibernate_timer)) {
-				he_time_cmd_payload = ktime_to_ms(ktime_sub(
+				time_since_allow_hibernate = ktime_sub(
 						ktime_get_boottime(),
-						cs40l26->allow_hibernate_ts));
-				if (he_time_cmd_payload > CS40L26_DSP_MBOX_HE_PAYLOAD_MAX_MS)
-					he_time_cmd_payload = CS40L26_DSP_MBOX_HE_PAYLOAD_OVERFLOW;
+						cs40l26->allow_hibernate_ts);
+				if (ktime_to_ms(time_since_allow_hibernate) <
+					CS40L26_DSP_MBOX_HE_PAYLOAD_MAX_MS)
+					he_time_cmd_payload = ktime_to_ms(
+						time_since_allow_hibernate);
+				else
+					he_time_cmd_payload =
+					CS40L26_DSP_MBOX_HE_PAYLOAD_OVERFLOW;
 			} else {
 				he_time_cmd_payload =
 					CS40L26_DSP_MBOX_HE_PAYLOAD_OVERFLOW;
@@ -2214,7 +2220,7 @@ static u8 *cs40l26_ncw_refactor_data(struct cs40l26_private *cs40l26, u8 amp, u8
 			sections[i].flags |= CS40L26_WT_TYPE10_COMP_ROM_FLAG;
 	}
 
-	out_data = kzalloc(data_bytes, GFP_KERNEL);
+	out_data = kcalloc(data_bytes, sizeof(u8), GFP_KERNEL);
 	if (!out_data) {
 		error = -ENOMEM;
 		goto sections_free;
@@ -2267,8 +2273,9 @@ static int cs40l26_composite_upload(struct cs40l26_private *cs40l26, s16 *in_dat
 	u8 nsections, global_rep, out_nsections = 0;
 	int out_data_bytes = 0, data_bytes = 0;
 	struct device *dev = cs40l26->dev;
-	u8 ncw_nsections, ncw_global_rep, *data, *ncw_data, *out_data;
+	u8 *out_data = NULL;
 	u8 delay_section_data[CS40L26_WT_TYPE10_SECTION_BYTES_MIN];
+	u8 ncw_nsections, ncw_global_rep, *data, *ncw_data;
 	struct cs40l26_owt_section *sections;
 	struct cl_dsp_memchunk ch, out_ch;
 	struct cl_dsp_owt_header *header;
@@ -3682,6 +3689,7 @@ static int cs40l26_logger_setup(struct cs40l26_private *cs40l26)
 	int error, i;
 
 	if (cs40l26->log_srcs != NULL) {
+		memset(cs40l26->log_srcs, 0, cs40l26->num_log_srcs * CL_DSP_BYTES_PER_WORD);
 		cs40l26->num_log_srcs = 0;
 		devm_kfree(cs40l26->dev, cs40l26->log_srcs);
 	}
@@ -3708,8 +3716,7 @@ static int cs40l26_logger_setup(struct cs40l26_private *cs40l26)
 		if (error)
 			return error;
 
-		error = regmap_write(cs40l26->regmap, reg,
-				CS40L26_LOGGER_SRC_PROTECTION_OUT << 8);
+		error = regmap_write(cs40l26->regmap, reg, CS40L26_LOGGER_SRC_FF_OUT);
 		if (error)
 			return error;
 
@@ -3718,7 +3725,6 @@ static int cs40l26_logger_setup(struct cs40l26_private *cs40l26)
 		if (error)
 			return error;
 
-		exc_reg += CL_DSP_BYTES_PER_WORD;
 		exc_reg &= CS40L26_LOGGER_SRC_ADDR_MASK;
 		exc_reg /= CL_DSP_BYTES_PER_WORD;
 
