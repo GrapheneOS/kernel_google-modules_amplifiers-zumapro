@@ -11,11 +11,7 @@
 // it under the terms of the GNU General Public License version 2 as
 // published by the Free Software Foundation.
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-#include "cs40l26.h"
-#else
 #include <linux/mfd/cs40l26.h>
-#endif
 
 static ssize_t dsp_state_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -207,19 +203,9 @@ static ssize_t vibe_state_show(struct device *dev, struct device_attribute *attr
 		return -EPERM;
 	}
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-	/*
-	 * Since HAL will only read this attribute after sysfs_nofity is called,
-	 * removing the mutex_lock to mitigate the chances that HAL only get the
-	 * stopped state in triggering the back-to-back short haptic effect
-	 * (e.g. TICK effct).
-	 */
-	state = cs40l26->vibe_state;
-#else
 	mutex_lock(&cs40l26->lock);
 	state = cs40l26->vibe_state;
 	mutex_unlock(&cs40l26->lock);
-#endif
 
 	return snprintf(buf, PAGE_SIZE, "%u\n", state);
 }
