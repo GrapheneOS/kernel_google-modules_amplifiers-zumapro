@@ -10,7 +10,11 @@
 // it under the terms of the GNU General Public License version 2 as
 // published by the Free Software Foundation.
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+#include "cs40l26.h"
+#else
 #include <linux/mfd/cs40l26.h>
+#endif
 
 static const struct i2c_device_id cs40l26_id_i2c[] = {
 	{"cs40l26a", 0},
@@ -51,7 +55,24 @@ static int cs40l26_i2c_probe(struct i2c_client *client, const struct i2c_device_
 	cs40l26->dev = &client->dev;
 	cs40l26->irq = client->irq;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	error = cs40l26_probe(cs40l26);
+	if ((error != 0) && (error != -ENOMEM)) {
+		if (++cs40l26_probed_retry_count[cs40l26->device_id] ==
+				CS40L26_MAX_PROBE_RETRY) {
+			dev_err(&client->dev, "Failed to probe.\n");
+			cs40l26->cs40l26_not_probed = true;
+			cs40l26_add_codec_devices(&client->dev);
+			return 0;
+		}
+
+		dev_err(&client->dev, "Failed to probe. Try to defer probe: %d\n", error);
+		error = -EPROBE_DEFER;
+	}
+	return error;
+#else
 	return cs40l26_probe(cs40l26);
+#endif
 }
 
 static void cs40l26_i2c_remove(struct i2c_client *client)
