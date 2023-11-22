@@ -116,21 +116,6 @@ static int cs40l26_dsp_write(struct cs40l26_private *cs40l26, u32 reg, u32 val)
 	return 0;
 }
 
-int cs40l26_get_ram_ext_algo_id(struct cs40l26_private *cs40l26, unsigned int *algo_id)
-{
-	unsigned int fw_rev;
-	int error;
-
-	error = cl_dsp_fw_rev_get(cs40l26->dsp, &fw_rev);
-	if (error)
-		return error;
-
-	*algo_id = (fw_rev >= CS40L26_FW_RAM_EXT_RELOC_REV) ? cs40l26->fw_id : CS40L26_EXT_ALGO_ID;
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(cs40l26_get_ram_ext_algo_id);
-
 int cs40l26_mailbox_write(struct cs40l26_private *cs40l26, u32 write_val)
 {
 	int i, error;
@@ -224,28 +209,61 @@ int cs40l26_set_pll_loop(struct cs40l26_private *cs40l26, unsigned int pll_loop)
 }
 EXPORT_SYMBOL_GPL(cs40l26_set_pll_loop);
 
-static const struct cs40l26_dbc cs40l26_dbc_params[CS40L26_DBC_NUM_CONTROLS] = {
-	{
-		.name = CS40L26_DBC_ENV_REL_COEF_NAME,
-		.max = CS40L26_DBC_CONTROLS_MAX,
-	},
-	{
-		.name = CS40L26_DBC_RISE_HEADROOM_NAME,
-		.max = CS40L26_DBC_CONTROLS_MAX,
-	},
-	{
-		.name = CS40L26_DBC_FALL_HEADROOM_NAME,
-		.max = CS40L26_DBC_CONTROLS_MAX,
-	},
-	{
-		.name = CS40L26_DBC_TX_LVL_THRESH_FS_NAME,
-		.max = CS40L26_DBC_CONTROLS_MAX,
-	},
-	{
-		.name = CS40L26_DBC_TX_LVL_HOLD_OFF_MS_NAME,
-		.max = CS40L26_DBC_TX_LVL_HOLD_OFF_MS_MAX,
-	},
-};
+int cs40l26_dbc_get(struct cs40l26_private *cs40l26, enum cs40l26_dbc_type dbc, unsigned int *val)
+{
+	struct device *dev = cs40l26->dev;
+	unsigned int reg;
+	int error;
+
+	error = cs40l26_pm_enter(dev);
+	if (error)
+		return error;
+
+	mutex_lock(&cs40l26->lock);
+
+	error = cl_dsp_get_reg(cs40l26->dsp, cs40l26_dbc_params[dbc].name, CL_DSP_XM_UNPACKED_TYPE,
+			CS40L26_EXT_ALGO_ID, &reg);
+	if (error)
+		goto err_pm;
+
+	error = regmap_read(cs40l26->regmap, reg, val);
+	if (error)
+		dev_err(dev, "Failed to read Dynamic Boost Control value\n");
+
+err_pm:
+	mutex_unlock(&cs40l26->lock);
+
+	cs40l26_pm_exit(dev);
+
+	return error;
+}
+EXPORT_SYMBOL_GPL(cs40l26_dbc_get);
+
+int cs40l26_dbc_set(struct cs40l26_private *cs40l26, enum cs40l26_dbc_type dbc, u32 val)
+{
+	struct device *dev = cs40l26->dev;
+	u32 reg, write_val;
+	int error;
+
+	if (val > cs40l26_dbc_params[dbc].max)
+		write_val = cs40l26_dbc_params[dbc].max;
+	else if (val < cs40l26_dbc_params[dbc].min)
+		write_val = cs40l26_dbc_params[dbc].min;
+	else
+		write_val = val;
+
+	error = cl_dsp_get_reg(cs40l26->dsp, cs40l26_dbc_params[dbc].name,
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
+	if (error)
+		return error;
+
+	error = regmap_write(cs40l26->regmap, reg, write_val);
+	if (error)
+		dev_err(dev, "Failed to write Dynamic Boost Control value\n");
+
+	return error;
+}
+EXPORT_SYMBOL_GPL(cs40l26_dbc_set);
 
 int cs40l26_pm_timeout_ms_set(struct cs40l26_private *cs40l26, unsigned int dsp_state,
 		u32 timeout_ms)
@@ -702,9 +720,6 @@ static irqreturn_t cs40l26_handle_mbox_buffer(int irq, void *data)
 			cs40l26->wksrc_sts |= CS40L26_WKSRC_STS_EN;
 			dev_dbg(dev, "Mailbox: AWAKE\n");
 			break;
-		case CS40L26_DSP_MBOX_INIT:
-			dev_dbg(dev, "Mailbox: INIT\n");
-			break;
 		case CS40L26_DSP_MBOX_F0_EST_START:
 			dev_dbg(dev, "Mailbox: F0_EST_START\n");
 			break;
@@ -903,29 +918,6 @@ static int cs40l26_error_release(struct cs40l26_private *cs40l26,
 	error = regmap_write(cs40l26->regmap, CS40L26_ERROR_RELEASE, err_cfg);
 	if (error)
 		dev_err(dev, "Actuator Safe Mode release sequence failed\n");
-
-	return error;
-}
-
-static int cs40l26_handle_pre_irq(void *irq_drv_data)
-{
-	struct cs40l26_private *cs40l26 = irq_drv_data;
-	unsigned int sts;
-	int error;
-
-	error = cs40l26_pm_enter(cs40l26->dev);
-	if (error)
-		return error;
-
-	error = regmap_read(cs40l26->regmap, CS40L26_IRQ1_STATUS, &sts);
-	if (error)
-		goto err_pm;
-
-	if (!(sts & CS40L26_IRQ_STATUS_MASK))
-		dev_err(cs40l26->dev, "IRQ1 asserted with no pending interrupts\n");
-
-err_pm:
-	cs40l26_pm_exit(cs40l26->dev);
 
 	return error;
 }
@@ -1174,7 +1166,7 @@ static const struct regmap_irq cs40l26_reg_irqs[] = {
 	CS40L26_REG_IRQ(IRQ1_EINT_2, VBBR_ATT_CLR),
 };
 
-static struct regmap_irq_chip cs40l26_regmap_irq_chip = {
+static const struct regmap_irq_chip cs40l26_regmap_irq_chip = {
 	.name = "cs40l26 IRQ1 Controller",
 	.status_base = CS40L26_IRQ1_EINT_1,
 	.mask_base = CS40L26_IRQ1_MASK_1,
@@ -1182,7 +1174,6 @@ static struct regmap_irq_chip cs40l26_regmap_irq_chip = {
 	.num_regs = 2,
 	.irqs = cs40l26_reg_irqs,
 	.num_irqs = ARRAY_SIZE(cs40l26_reg_irqs),
-	.handle_pre_irq = cs40l26_handle_pre_irq,
 	.runtime_pm = true,
 };
 
@@ -1356,6 +1347,7 @@ static int cs40l26_pseq_multi_write(struct cs40l26_private *cs40l26,
 
 static int cs40l26_update_reg_defaults_via_pseq(struct cs40l26_private *cs40l26)
 {
+	struct device *dev = cs40l26->dev;
 	int error;
 
 	error = cs40l26_pseq_write(cs40l26, CS40L26_NGATE1_INPUT, CS40L26_DATA_SRC_DSP1TX4, true,
@@ -1363,10 +1355,21 @@ static int cs40l26_update_reg_defaults_via_pseq(struct cs40l26_private *cs40l26)
 	if (error)
 		return error;
 
+	error = cs40l26_pseq_write(cs40l26, CS40L26_MIXER_NGATE_CH1_CFG,
+			CS40L26_MIXER_NGATE_CH1_CFG_DEFAULT_NEW, true, CS40L26_PSEQ_OP_WRITE_FULL);
+	if (error) {
+		dev_err(dev, "Failed to sequence Mixer Noise Gate\n");
+		return error;
+	}
+
 	/* set SPK_DEFAULT_HIZ to 1 */
-	return cs40l26_pseq_write(cs40l26, CS40L26_TST_DAC_MSM_CONFIG,
+	error = cs40l26_pseq_write(cs40l26, CS40L26_TST_DAC_MSM_CONFIG,
 			CS40L26_TST_DAC_MSM_CONFIG_DEFAULT_CHANGE_VALUE_H16,
 			true, CS40L26_PSEQ_OP_WRITE_H16);
+	if (error)
+		dev_err(dev, "Failed to sequence register default updates\n");
+
+	return error;
 }
 
 static int cs40l26_pseq_init(struct cs40l26_private *cs40l26)
@@ -1490,15 +1493,19 @@ static int cs40l26_irq_update_mask(struct cs40l26_private *cs40l26, u32 reg, u32
 	if (bit_mask & GENMASK(31, 16)) {
 		error = cs40l26_pseq_write(cs40l26, reg, (new_mask & GENMASK(31, 16)) >> 16,
 			true, CS40L26_PSEQ_OP_WRITE_H16);
-		if (error)
+		if (error) {
+			dev_err(cs40l26->dev, "Failed to update IRQ mask H16");
 			return error;
+		}
 	}
 
 	if (bit_mask & GENMASK(15, 0)) {
 		error = cs40l26_pseq_write(cs40l26, reg, (new_mask & GENMASK(15, 0)),
 			true, CS40L26_PSEQ_OP_WRITE_L16);
-		if (error)
+		if (error) {
+			dev_err(cs40l26->dev, "Failed to update IRQ mask L16");
 			return error;
+		}
 	}
 
 	return error;
@@ -1681,9 +1688,9 @@ static bool cs40l26_is_no_wait_ram_index(struct cs40l26_private *cs40l26,
 static void cs40l26_set_gain_worker(struct work_struct *work)
 {
 	struct cs40l26_private *cs40l26 = container_of(work, struct cs40l26_private, set_gain_work);
-	u32 algo_id, reg;
 	int error;
 	u16 gain;
+	u32 reg;
 
 	error = cs40l26_pm_enter(cs40l26->dev);
 	if (error)
@@ -1703,12 +1710,8 @@ static void cs40l26_set_gain_worker(struct work_struct *work)
 	dev_dbg(cs40l26->dev, "%s: gain = %u%%\n", __func__, gain);
 
 	/* Write Q21.2 value to SOURCE_ATTENUATION */
-	error = cs40l26_get_ram_ext_algo_id(cs40l26, &algo_id);
-	if (error)
-		goto err_mutex;
-
 	error = cl_dsp_get_reg(cs40l26->dsp, "SOURCE_ATTENUATION",
-			CL_DSP_XM_UNPACKED_TYPE, algo_id, &reg);
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
 	if (error)
 		goto err_mutex;
 
@@ -1728,7 +1731,7 @@ static void cs40l26_vibe_start_worker(struct work_struct *work)
 	struct device *dev = cs40l26->dev;
 	struct cs40l26_uploaded_effect *ueffect;
 	struct ff_effect *effect;
-	u32 algo_id, reg;
+	unsigned int reg;
 	u16 duration;
 	bool invert;
 	int error;
@@ -1762,12 +1765,8 @@ static void cs40l26_vibe_start_worker(struct work_struct *work)
 		goto err_mutex;
 	}
 
-	error = cs40l26_get_ram_ext_algo_id(cs40l26, &algo_id);
-	if (error)
-		goto err_mutex;
-
 	error = cl_dsp_get_reg(cs40l26->dsp, "SOURCE_INVERT",
-			CL_DSP_XM_UNPACKED_TYPE, algo_id, &reg);
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_EXT_ALGO_ID, &reg);
 	if (error)
 		goto err_mutex;
 
@@ -1898,61 +1897,34 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 	return 0;
 }
 
-static int cs40l26_num_ram_waves(struct cs40l26_private *cs40l26)
+int cs40l26_get_num_waves(struct cs40l26_private *cs40l26, u32 *num_waves)
 {
-	u32 num_of_waves, reg;
+	u32 reg, nwaves, nowt;
 	int error;
-
-	if (!cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_VIBEGEN_ALGO_ID))
-		return 0;
 
 	error = cl_dsp_get_reg(cs40l26->dsp, "NUM_OF_WAVES", CL_DSP_XM_UNPACKED_TYPE,
 			CS40L26_VIBEGEN_ALGO_ID, &reg);
 	if (error)
 		return error;
 
-	error = cs40l26_dsp_read(cs40l26, reg, &num_of_waves);
+	error = cs40l26_dsp_read(cs40l26, reg, &nwaves);
 	if (error)
 		return error;
 
-	return (int) num_of_waves;
-}
-
-static int cs40l26_num_owt_waves(struct cs40l26_private *cs40l26)
-{
-	u32 owt_num_of_waves, reg;
-	int error;
-
-	if (!cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_VIBEGEN_ALGO_ID))
-		return 0;
-
-	error = cl_dsp_get_reg(cs40l26->dsp, "OWT_NUM_OF_WAVES_XM", CL_DSP_XM_UNPACKED_TYPE,
-			CS40L26_VIBEGEN_ALGO_ID, &reg);
+	error = cl_dsp_get_reg(cs40l26->dsp, "OWT_NUM_OF_WAVES_XM",
+			CL_DSP_XM_UNPACKED_TYPE, CS40L26_VIBEGEN_ALGO_ID, &reg);
 	if (error)
 		return error;
 
-	error = cs40l26_dsp_read(cs40l26, reg, &owt_num_of_waves);
+	error = cs40l26_dsp_read(cs40l26, reg, &nowt);
 	if (error)
 		return error;
 
-	return (int) owt_num_of_waves;
+	*num_waves = nwaves + nowt;
+
+	return 0;
 }
-
-int cs40l26_num_waves(struct cs40l26_private *cs40l26)
-{
-	int nowt, nram;
-
-	nram = cs40l26_num_ram_waves(cs40l26);
-	if (nram < 0)
-		return nram;
-
-	nowt = cs40l26_num_owt_waves(cs40l26);
-	if (nowt <  0)
-		return nowt;
-
-	return nram + nowt;
-}
-EXPORT_SYMBOL_GPL(cs40l26_num_waves);
+EXPORT_SYMBOL_GPL(cs40l26_get_num_waves);
 
 static struct cl_dsp_owt_header *cs40l26_owt_header(struct cs40l26_private *cs40l26, u8 index,
 		u16 bank)
@@ -2599,142 +2571,90 @@ static int cs40l26_sine_upload(struct cs40l26_private *cs40l26, struct ff_effect
 	return 0;
 }
 
-static int cs40l26_custom_rom(struct cs40l26_private *cs40l26, u32 *trigger_index)
-{
-	u16 index;
-
-	index = (u16) (cs40l26->raw_custom_data[1] & CS40L26_MAX_INDEX_MASK);
-
-	*trigger_index = index + CS40L26_ROM_INDEX_START;
-	if (*trigger_index > CS40L26_ROM_INDEX_END) {
-		dev_err(cs40l26->dev, "Index 0x%X out of bounds\n", *trigger_index);
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static int cs40l26_custom_ram(struct cs40l26_private *cs40l26, u32 *trigger_index)
-{
-	int max_index_tmp, nram;
-	u32 max_index;
-	u16 index;
-
-	index = (u16) (cs40l26->raw_custom_data[1] & CS40L26_MAX_INDEX_MASK);
-
-	nram = cs40l26_num_ram_waves(cs40l26);
-	if (nram < 0) {
-		return nram;
-	} else if (nram == 0) {
-		dev_err(cs40l26->dev, "No waveforms in RAM bank\n");
-		return -ENODATA;
-	}
-
-	max_index_tmp = CS40L26_RAM_INDEX_START + nram - 1;
-	max_index = (u32) max_index_tmp;
-
-	*trigger_index = index + CS40L26_RAM_INDEX_START;
-
-	if (*trigger_index > max_index) {
-		dev_err(cs40l26->dev, "RAM Index 0x%X out of bounds\n", *trigger_index);
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static int cs40l26_custom_owt(struct cs40l26_private *cs40l26, size_t data_len, u32 *trigger_index)
-{
-	bool pwle = (cs40l26->raw_custom_data[1] == CS40L26_WT_TYPE12_IDENTIFIER);
-	u8 *pwle_data = NULL;
-	int error, index_tmp, nowt;
-	size_t pwle_data_len;
-	u16 index;
-
-	if (pwle) {
-		pwle_data_len = cs40l26->raw_custom_data_len * 2;
-
-		pwle_data = kcalloc(pwle_data_len, sizeof(u8), GFP_KERNEL);
-		if (IS_ERR_OR_NULL(pwle_data)) {
-			error = pwle_data ? PTR_ERR(pwle_data) : -ENOMEM;
-			return error;
-		}
-
-		memcpy(pwle_data, cs40l26->raw_custom_data, pwle_data_len);
-
-		error = cs40l26_owt_upload(cs40l26, pwle_data, pwle_data_len);
-		if (error)
-			goto err_free;
-	} else {
-		error = cs40l26_composite_upload(cs40l26, cs40l26->raw_custom_data, data_len);
-		if (error)
-			goto err_free;
-	}
-
-	nowt = cs40l26_num_owt_waves(cs40l26);
-	if (nowt < 0) {
-		error = nowt;
-		goto err_free;
-	}
-
-	index_tmp = nowt - 1;
-	if (index_tmp < 0) {
-		dev_err(cs40l26->dev, "Invalid OWT index: %d\n", index_tmp);
-		error = -EINVAL;
-		goto err_free;
-	}
-	index = (u16) (index_tmp & CS40L26_MAX_INDEX_MASK);
-	*trigger_index = index + CS40L26_OWT_INDEX_START;
-
-	if (*trigger_index > CS40L26_OWT_INDEX_END) {
-		dev_err(cs40l26->dev, "Index 0x%X out of bounds\n", *trigger_index);
-		error = -EINVAL;
-	}
-
-err_free:
-	kfree(pwle_data);
-
-	return error;
-}
-
 static int cs40l26_custom_upload(struct cs40l26_private *cs40l26, struct ff_effect *effect,
 		struct cs40l26_uploaded_effect *ueffect)
 {
-	size_t data_len = effect->u.periodic.custom_len;
-	u32 trigger_index = 0;
-	int error;
-	u16 bank;
+	struct device *dev = cs40l26->dev;
+	u8 *pwle_data = NULL;
+	u32 nwaves, min_index, max_index, trigger_index;
+	int error, data_len, pwle_data_len;
+	u16 index, bank;
+
+	data_len = effect->u.periodic.custom_len;
 
 	if (data_len > CS40L26_CUSTOM_DATA_SIZE) {
-		bank = (u16) CS40L26_OWT_BANK_ID;
+		if (cs40l26->raw_custom_data[1] == CS40L26_WT_TYPE12_IDENTIFIER) {
+			pwle_data_len = cs40l26->raw_custom_data_len * 2;
+			pwle_data = kcalloc(pwle_data_len, sizeof(u8), GFP_KERNEL);
+			if (!pwle_data) {
+				dev_err(dev, "Failed to allocate space for PWLE\n");
+				return -ENOMEM;
+			}
 
-		error = cs40l26_custom_owt(cs40l26, data_len, &trigger_index);
-		if (error)
-			return error;
-	} else {
-		bank = (u16) cs40l26->raw_custom_data[0];
+			memcpy(pwle_data, cs40l26->raw_custom_data, pwle_data_len);
 
-		if (bank == CS40L26_RAM_BANK_ID) {
-			error = cs40l26_custom_ram(cs40l26, &trigger_index);
-			if (error)
-				return error;
-		} else if (bank == CS40L26_ROM_BANK_ID) {
-			error = cs40l26_custom_rom(cs40l26, &trigger_index);
+			error = cs40l26_owt_upload(cs40l26, pwle_data, pwle_data_len);
 			if (error)
 				return error;
 		} else {
-			dev_err(cs40l26->dev, "Invalid custom waveform bank: %u\n", bank);
+			error = cs40l26_composite_upload(cs40l26, cs40l26->raw_custom_data,
+					data_len);
+			if (error) {
+				dev_err(dev, "Failed to refactor OWT\n");
+				return error;
+			}
+		}
+
+		bank = (u16) CS40L26_OWT_BANK_ID;
+		index = (u16) cs40l26->num_owt_effects;
+	} else {
+		bank = (u16) cs40l26->raw_custom_data[0];
+		index = (u16) (cs40l26->raw_custom_data[1] & CS40L26_MAX_INDEX_MASK);
+	}
+
+	error = cs40l26_get_num_waves(cs40l26, &nwaves);
+	if (error)
+		return error;
+
+	switch (bank) {
+	case CS40L26_RAM_BANK_ID:
+		if (nwaves - cs40l26->num_owt_effects == 0) {
+			dev_err(dev, "No waveforms in RAM bank\n");
 			return -EINVAL;
 		}
+
+		min_index = CS40L26_RAM_INDEX_START;
+		max_index = min_index + nwaves - cs40l26->num_owt_effects - 1;
+		break;
+	case CS40L26_ROM_BANK_ID:
+		min_index = CS40L26_ROM_INDEX_START;
+		max_index = CS40L26_ROM_INDEX_END;
+		break;
+	case CS40L26_OWT_BANK_ID:
+		min_index = CS40L26_OWT_INDEX_START;
+		max_index = CS40L26_OWT_INDEX_END;
+		break;
+	default:
+		dev_err(dev, "Bank ID (%u) invalid\n", bank);
+		return -EINVAL;
 	}
+
+	trigger_index = index + min_index;
+	if (trigger_index < min_index || trigger_index > max_index) {
+		dev_err(dev, "Index 0x%X out of bounds (0x%X - 0x%X)\n", trigger_index, min_index,
+				max_index);
+		return -EINVAL;
+	}
+	dev_dbg(dev, "ID = %d, trigger index = 0x%08X\n", effect->id, trigger_index);
+
+	if (bank == CS40L26_OWT_BANK_ID)
+		cs40l26->num_owt_effects++;
 
 	ueffect->id = effect->id;
 	ueffect->wvfrm_bank = bank;
 	ueffect->trigger_index = trigger_index;
 
-	dev_dbg(cs40l26->dev, "ID = %d, trigger index = 0x%08X\n", effect->id, trigger_index);
-
-	return 0;
+	return error;
 }
 
 static int cs40l26_uploaded_effect_add(struct cs40l26_private *cs40l26, struct ff_effect *effect)
@@ -2790,7 +2710,8 @@ static void cs40l26_upload_worker(struct work_struct *work)
 			struct cs40l26_private, upload_work);
 	struct device *cdev = cs40l26->dev;
 	struct ff_effect *effect;
-	int error, nwaves;
+	u32 nwaves;
+	int error;
 
 	error = cs40l26_pm_enter(cdev);
 	if (error)
@@ -2810,13 +2731,11 @@ static void cs40l26_upload_worker(struct work_struct *work)
 	if (error)
 		goto out_mutex;
 
-	nwaves = cs40l26_num_waves(cs40l26);
-	if (nwaves < 0) {
-		error = nwaves;
+	error = cs40l26_get_num_waves(cs40l26, &nwaves);
+	if (error)
 		goto out_mutex;
-	}
 
-	dev_dbg(cdev, "Total number of waveforms = %d\n", nwaves);
+	dev_dbg(cdev, "Total number of waveforms = %u\n", nwaves);
 
 out_mutex:
 	mutex_unlock(&cs40l26->lock);
@@ -2914,6 +2833,8 @@ static int cs40l26_erase_owt(struct cs40l26_private *cs40l26,
 				ueffect_tmp->trigger_index > index)
 			ueffect_tmp->trigger_index--;
 	}
+
+	cs40l26->num_owt_effects--;
 
 	return 0;
 }
@@ -3058,15 +2979,30 @@ static int cs40l26_input_init(struct cs40l26_private *cs40l26)
 		return error;
 	}
 
-	error = sysfs_create_groups(&cs40l26->input->dev.kobj, cs40l26_attr_groups);
+	error = sysfs_create_group(&cs40l26->input->dev.kobj,
+			&cs40l26_dev_attr_group);
 	if (error) {
-		dev_err(dev, "Failed to create sysfs groups\n");
+		dev_err(dev, "Failed to create sysfs group: %d\n", error);
+		return error;
+	}
+
+	error = sysfs_create_group(&cs40l26->input->dev.kobj,
+			&cs40l26_dev_attr_cal_group);
+	if (error) {
+		dev_err(dev, "Failed to create cal sysfs group: %d\n", error);
+		return error;
+	}
+
+	error = sysfs_create_group(&cs40l26->input->dev.kobj,
+			&cs40l26_dev_attr_dbc_group);
+	if (error) {
+		dev_err(dev, "Failed to create DBC sysfs group\n");
 		return error;
 	}
 
 	cs40l26->vibe_init_success = true;
 
-	return 0;
+	return error;
 }
 
 static int cs40l26_part_num_resolve(struct cs40l26_private *cs40l26)
@@ -3246,8 +3182,10 @@ static int cs40l26_brwnout_prevention_init(struct cs40l26_private *cs40l26)
 
 	error = cs40l26_pseq_write(cs40l26, CS40L26_BLOCK_ENABLES2, enables, true,
 			CS40L26_PSEQ_OP_WRITE_FULL);
-	if (error)
+	if (error) {
+		dev_err(dev, "Failed to sequence brownout prevention\n");
 		return error;
+	}
 
 	if (cs40l26->vbbr.enable) {
 		pseq_mask = CS40L26_VBBR_ATT_CLR_MASK | CS40L26_VBBR_FLAG_MASK;
@@ -3543,29 +3481,6 @@ static int cs40l26_noise_gate_config(struct cs40l26_private *cs40l26)
 			CS40L26_PSEQ_OP_WRITE_FULL);
 }
 
-static int cs40l26_aux_noise_gate_config(struct cs40l26_private *cs40l26)
-{
-	u32 aux_ng_config;
-	int error;
-
-	if (cs40l26->aux_ng_thld > CS40L26_AUX_NG_THLD_MAX)
-		cs40l26->aux_ng_thld = CS40L26_AUX_NG_THLD_DEFAULT;
-
-	if (cs40l26->aux_ng_delay > CS40L26_AUX_NG_HOLD_MAX)
-		cs40l26->aux_ng_delay = CS40L26_AUX_NG_HOLD_DEFAULT;
-
-	aux_ng_config = FIELD_PREP(CS40L26_AUX_NG_THLD_MASK, cs40l26->aux_ng_thld) |
-			FIELD_PREP(CS40L26_AUX_NG_HOLD_MASK, cs40l26->aux_ng_delay) |
-			FIELD_PREP(CS40L26_AUX_NG_EN_MASK, cs40l26->aux_ng_enable);
-
-	error = regmap_write(cs40l26->regmap, CS40L26_MIXER_NGATE_CH1_CFG, aux_ng_config);
-	if (error)
-		return error;
-
-	return cs40l26_pseq_write(cs40l26, CS40L26_MIXER_NGATE_CH1_CFG, aux_ng_config, true,
-			CS40L26_PSEQ_OP_WRITE_FULL);
-}
-
 static int cs40l26_clip_lvl_config(struct cs40l26_private *cs40l26)
 {
 	u32 clip_lvl, digpwm_config;
@@ -3717,61 +3632,48 @@ static int cs40l26_handle_errata(struct cs40l26_private *cs40l26)
 			false, CS40L26_PSEQ_OP_WRITE_FULL);
 }
 
-static int cs40l26_dbc_set(struct cs40l26_private *cs40l26, enum cs40l26_dbc_type dbc, u32 val)
+int cs40l26_dbc_enable(struct cs40l26_private *cs40l26, u32 enable)
 {
-	u32 algo_id, reg, write_val;
+	unsigned int reg;
 	int error;
-
-	if (val > cs40l26_dbc_params[dbc].max)
-		write_val = cs40l26_dbc_params[dbc].max;
-	else
-		write_val = val;
-
-	error = cs40l26_get_ram_ext_algo_id(cs40l26, &algo_id);
-	if (error)
-		return error;
-
-	error = cl_dsp_get_reg(cs40l26->dsp, cs40l26_dbc_params[dbc].name, CL_DSP_XM_UNPACKED_TYPE,
-			algo_id, &reg);
-	if (error)
-		return error;
-
-	return regmap_write(cs40l26->regmap, reg, write_val);
-}
-
-static int cs40l26_dbc_enable(struct cs40l26_private *cs40l26)
-{
-	u32 algo_id, reg;
-	int error;
-
-	error = cs40l26_get_ram_ext_algo_id(cs40l26, &algo_id);
-	if (error)
-		return error;
 
 	error = cl_dsp_get_reg(cs40l26->dsp, "FLAGS", CL_DSP_XM_UNPACKED_TYPE,
-			algo_id, &reg);
+			CS40L26_EXT_ALGO_ID, &reg);
 	if (error)
 		return error;
 
-	return regmap_update_bits(cs40l26->regmap, reg, CS40L26_DBC_ENABLE_MASK,
-			1 << CS40L26_DBC_ENABLE_SHIFT);
-}
+	error = regmap_update_bits(cs40l26->regmap, reg, CS40L26_DBC_ENABLE_MASK,
+			enable << CS40L26_DBC_ENABLE_SHIFT);
+	if (error)
+		dev_err(cs40l26->dev, "Failed to %s DBC\n", enable ? "enable" : "disable");
 
-static int cs40l26_dbc_config(struct cs40l26_private *cs40l26)
+	return error;
+}
+EXPORT_SYMBOL_GPL(cs40l26_dbc_enable);
+
+static int cs40l26_handle_dbc_defaults(struct cs40l26_private *cs40l26)
 {
-	int error, i;
+	unsigned int i;
+	int error;
+	u32 val;
 
 	for (i = 0; i < CS40L26_DBC_NUM_CONTROLS; i++) {
-		if (cs40l26->dbc_configs[i] == CS40L26_DBC_DEFAULT)
-			continue;
+		val = cs40l26->dbc_defaults[i];
 
-		error = cs40l26_dbc_set(cs40l26, (enum cs40l26_dbc_type) i,
-				cs40l26->dbc_configs[i]);
+		if (val != CS40L26_DBC_USE_DEFAULT) {
+			error = cs40l26_dbc_set(cs40l26, i, val);
+			if (error)
+				return error;
+		}
+	}
+
+	if (cs40l26->dbc_enable_default) {
+		error = cs40l26_dbc_enable(cs40l26, 1);
 		if (error)
 			return error;
 	}
 
-	return cs40l26->dbc_enable ? cs40l26_dbc_enable(cs40l26) : 0;
+	return 0;
 }
 
 static int cs40l26_logger_setup(struct cs40l26_private *cs40l26)
@@ -3869,9 +3771,9 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 {
 	struct regmap *regmap = cs40l26->regmap;
 	struct device *dev = cs40l26->dev;
-	int error, nwaves;
 	unsigned int val;
-	u32 reg, value;
+	u32 reg, nwaves, value;
+	int error;
 
 	if (!cs40l26->fw_rom_only) {
 		error = regmap_update_bits(regmap, CS40L26_PWRMGT_CTL,
@@ -3963,25 +3865,15 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 	if (error)
 		return error;
 
-	if (!cs40l26->dbc_tuning_loaded) {
-		error = cs40l26_dbc_config(cs40l26);
-		if (error)
-			return error;
-	} else {
-		error = cs40l26_dbc_enable(cs40l26);
-		if (error)
-			return error;
-	}
+	error = cs40l26_handle_dbc_defaults(cs40l26);
+	if (error)
+		return error;
 
 	error = cs40l26_zero_cross_config(cs40l26);
 	if (error)
 		return error;
 
 	error = cs40l26_noise_gate_config(cs40l26);
-	if (error)
-		return error;
-
-	error = cs40l26_aux_noise_gate_config(cs40l26);
 	if (error)
 		return error;
 
@@ -4024,13 +3916,13 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 	if (error)
 		goto pm_err;
 
-	nwaves = cs40l26_num_waves(cs40l26);
-	if (nwaves < 0) {
-		error = nwaves;
+	error = cs40l26_get_num_waves(cs40l26, &nwaves);
+	if (error)
 		goto pm_err;
-	}
 
 	dev_info(dev, "%s loaded with %u RAM waveforms\n", CS40L26_DEV_NAME, nwaves);
+
+	cs40l26->num_owt_effects = 0;
 
 	value = (cs40l26->comp_enable_redc << CS40L26_COMP_EN_REDC_SHIFT) |
 			(cs40l26->comp_enable_f0 << CS40L26_COMP_EN_F0_SHIFT);
@@ -4055,11 +3947,6 @@ pm_err:
 static void cs40l26_gain_adjust(struct cs40l26_private *cs40l26, s32 adjust)
 {
 	u16 total, asp, change;
-
-	if (abs(adjust) > 100) {
-		dev_warn(cs40l26->dev, "Gain adjust %d invalid, not applied\n", adjust);
-		return;
-	}
 
 	asp = cs40l26->asp_scale_pct;
 
@@ -4146,45 +4033,47 @@ static char **cs40l26_get_tuning_names(struct cs40l26_private *cs40l26, int *act
 		return ERR_PTR(-ENOMEM);
 
 	for (i = 0; i < CS40L26_MAX_TUNING_FILES; i++) {
-		coeff_files[i] = kzalloc(CS40L26_FILE_NAME_MAX_LEN, GFP_KERNEL);
+		coeff_files[i] = kzalloc(CS40L26_TUNING_FILE_NAME_MAX_LEN, GFP_KERNEL);
 		if (!coeff_files[i])
 			goto err_free;
 	}
 
 	if (tuning) {
-		snprintf(coeff_files[file_count++], CS40L26_FILE_NAME_MAX_LEN, "%s%d%s",
-				CS40L26_WT_FILE_PREFIX, tuning, CS40L26_FILE_SUFFIX);
-		snprintf(coeff_files[file_count++], CS40L26_FILE_NAME_MAX_LEN, "%s%d%s",
-				CS40L26_SVC_FILE_PREFIX, tuning, CS40L26_FILE_SUFFIX);
+		snprintf(coeff_files[file_count++], CS40L26_TUNING_FILE_NAME_MAX_LEN, "%s%d%s",
+				CS40L26_WT_FILE_PREFIX, tuning, CS40L26_TUNING_FILE_SUFFIX);
 	} else {
 		strscpy(coeff_files[file_count++], CS40L26_WT_FILE_NAME,
-				CS40L26_FILE_NAME_MAX_LEN);
-		strscpy(coeff_files[file_count++], CS40L26_SVC_FILE_NAME,
-				CS40L26_FILE_NAME_MAX_LEN);
+				CS40L26_TUNING_FILE_NAME_MAX_LEN);
 	}
 
+	if (tuning) {
+		snprintf(coeff_files[file_count++], CS40L26_TUNING_FILE_NAME_MAX_LEN, "%s%d%s",
+				CS40L26_SVC_TUNING_FILE_PREFIX, tuning, CS40L26_TUNING_FILE_SUFFIX);
+	} else {
+		strscpy(coeff_files[file_count++], CS40L26_SVC_TUNING_FILE_NAME,
+				CS40L26_TUNING_FILE_NAME_MAX_LEN);
+	}
 	if (cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_LF0T_ALGO_ID))
 		strscpy(coeff_files[file_count++], CS40L26_LF0T_FILE_NAME,
-				CS40L26_FILE_NAME_MAX_LEN);
+				CS40L26_TUNING_FILE_NAME_MAX_LEN);
 
 	if (cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_DVL_ALGO_ID))
 		strscpy(coeff_files[file_count++], CS40L26_DVL_FILE_NAME,
-				CS40L26_FILE_NAME_MAX_LEN);
+				CS40L26_TUNING_FILE_NAME_MAX_LEN);
 
 	if (cs40l26->fw_id == CS40L26_FW_ID) {
 		if (cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_A2H_ALGO_ID))
-			strscpy(coeff_files[file_count++], CS40L26_A2H_FILE_NAME,
-					CS40L26_FILE_NAME_MAX_LEN);
+			strscpy(coeff_files[file_count++],
+				CS40L26_A2H_TUNING_FILE_NAME,
+				CS40L26_TUNING_FILE_NAME_MAX_LEN);
 
 		if (cl_dsp_algo_is_present(cs40l26->dsp, CS40L26_EP_ALGO_ID))
-			strscpy(coeff_files[file_count++], CS40L26_EP_FILE_NAME,
-					CS40L26_FILE_NAME_MAX_LEN);
-
-		strscpy(coeff_files[file_count++], CS40L26_DBC_FILE_NAME,
-				CS40L26_FILE_NAME_MAX_LEN);
+			strscpy(coeff_files[file_count++],
+				CS40L26_EP_TUNING_FILE_NAME,
+				CS40L26_TUNING_FILE_NAME_MAX_LEN);
 	} else {
-		strscpy(coeff_files[file_count++], CS40L26_CALIB_FILE_NAME,
-				CS40L26_FILE_NAME_MAX_LEN);
+		strscpy(coeff_files[file_count++], CS40L26_CALIB_BIN_FILE_NAME,
+				CS40L26_TUNING_FILE_NAME_MAX_LEN);
 	}
 
 	*actual_num_files = file_count;
@@ -4217,15 +4106,11 @@ static int cs40l26_coeff_load(struct cs40l26_private *cs40l26, u32 tuning)
 		}
 
 		error = cl_dsp_coeff_file_parse(cs40l26->dsp, coeff);
-		if (error) {
+		if (error)
 			dev_warn(dev, "Failed to load %s, %d. Continuing...\n", coeff_files[i],
 					error);
-		} else {
+		else
 			dev_info(dev, "%s Loaded Successfully\n", coeff_files[i]);
-			if (!strncmp(coeff_files[i], CS40L26_DBC_FILE_NAME,
-					CS40L26_FILE_NAME_MAX_LEN))
-				cs40l26->dbc_tuning_loaded = true;
-		}
 
 		release_firmware(coeff);
 	}
@@ -4440,8 +4325,6 @@ static int cs40l26_request_irq(struct cs40l26_private *cs40l26)
 {
 	int error, irq, i;
 
-	cs40l26_regmap_irq_chip.irq_drv_data = cs40l26;
-
 	error = devm_regmap_add_irq_chip(cs40l26->dev, cs40l26->regmap,
 			cs40l26->irq, IRQF_ONESHOT | IRQF_SHARED | IRQF_TRIGGER_LOW,
 			-1, &cs40l26_regmap_irq_chip, &cs40l26->irq_data);
@@ -4565,10 +4448,17 @@ static int cs40l26_handle_svc_le_nodes(struct cs40l26_private *cs40l26)
 			continue;
 		}
 
-		if (fwnode_property_read_u32(child, "cirrus,gain-adjust", &gain_adjust_raw))
+		if (fwnode_property_read_u32(child, "cirrus,gain-adjust", &gain_adjust_raw)) {
 			gain_adjust = 0;
-		else
-			gain_adjust = (s32) gain_adjust_raw;
+		} else {
+			if (gain_adjust_raw > 100) {
+				gain_adjust = 0;
+				dev_warn(dev, "Gain adjust %u invalid, not applied\n",
+						gain_adjust_raw);
+			} else {
+				gain_adjust = (s32) gain_adjust_raw;
+			}
+		}
 
 		if (fwnode_property_read_u32(child, "cirrus,index", &index)) {
 			dev_err(dev, "No index specified for SVC LE node\n");
@@ -4799,16 +4689,6 @@ static int cs40l26_parse_properties(struct cs40l26_private *cs40l26)
 	if (error)
 		cs40l26->ng_delay = CS40L26_NG_DELAY_DEFAULT;
 
-	cs40l26->aux_ng_enable = device_property_present(dev, "cirrus,aux-ng-enable");
-
-	error = device_property_read_u32(dev, "cirrus,aux-ng-thld", &cs40l26->aux_ng_thld);
-	if (error)
-		cs40l26->aux_ng_thld = CS40L26_AUX_NG_THLD_DEFAULT;
-
-	error = device_property_read_u32(dev, "cirrus,aux-ng-delay", &cs40l26->aux_ng_delay);
-	if (error)
-		cs40l26->aux_ng_delay = CS40L26_AUX_NG_HOLD_DEFAULT;
-
 	error = device_property_read_u32(dev, "cirrus,f0-default", &cs40l26->f0_default);
 	if (error && error != -EINVAL)
 		return error;
@@ -4821,32 +4701,32 @@ static int cs40l26_parse_properties(struct cs40l26_private *cs40l26)
 	if (error && error != -EINVAL)
 		return error;
 
-	cs40l26->dbc_enable = device_property_present(dev, "cirrus,dbc-enable");
+	cs40l26->dbc_enable_default = device_property_present(dev, "cirrus,dbc-enable");
 
 	error = device_property_read_u32(dev, "cirrus,dbc-env-rel-coef",
-			&cs40l26->dbc_configs[CS40L26_DBC_ENV_REL_COEF]);
+			&cs40l26->dbc_defaults[CS40L26_DBC_ENV_REL_COEF]);
 	if (error)
-		cs40l26->dbc_configs[CS40L26_DBC_ENV_REL_COEF] = CS40L26_DBC_DEFAULT;
+		cs40l26->dbc_defaults[CS40L26_DBC_ENV_REL_COEF] = CS40L26_DBC_USE_DEFAULT;
 
 	error = device_property_read_u32(dev, "cirrus,dbc-fall-headroom",
-			&cs40l26->dbc_configs[CS40L26_DBC_FALL_HEADROOM]);
+			&cs40l26->dbc_defaults[CS40L26_DBC_FALL_HEADROOM]);
 	if (error)
-		cs40l26->dbc_configs[CS40L26_DBC_FALL_HEADROOM] = CS40L26_DBC_DEFAULT;
+		cs40l26->dbc_defaults[CS40L26_DBC_FALL_HEADROOM] = CS40L26_DBC_USE_DEFAULT;
 
 	error = device_property_read_u32(dev, "cirrus,dbc-rise-headroom",
-			&cs40l26->dbc_configs[CS40L26_DBC_RISE_HEADROOM]);
+		&cs40l26->dbc_defaults[CS40L26_DBC_RISE_HEADROOM]);
 	if (error)
-		cs40l26->dbc_configs[CS40L26_DBC_RISE_HEADROOM] = CS40L26_DBC_DEFAULT;
+		cs40l26->dbc_defaults[CS40L26_DBC_RISE_HEADROOM] = CS40L26_DBC_USE_DEFAULT;
 
 	error = device_property_read_u32(dev, "cirrus,dbc-tx-lvl-hold-off-ms",
-			&cs40l26->dbc_configs[CS40L26_DBC_TX_LVL_HOLD_OFF_MS]);
+			&cs40l26->dbc_defaults[CS40L26_DBC_TX_LVL_HOLD_OFF_MS]);
 	if (error)
-		cs40l26->dbc_configs[CS40L26_DBC_TX_LVL_HOLD_OFF_MS] = CS40L26_DBC_DEFAULT;
+		cs40l26->dbc_defaults[CS40L26_DBC_TX_LVL_HOLD_OFF_MS] = CS40L26_DBC_USE_DEFAULT;
 
 	error = device_property_read_u32(dev, "cirrus,dbc-tx-lvl-thresh-fs",
-			&cs40l26->dbc_configs[CS40L26_DBC_TX_LVL_THRESH_FS]);
+			&cs40l26->dbc_defaults[CS40L26_DBC_TX_LVL_THRESH_FS]);
 	if (error)
-		cs40l26->dbc_configs[CS40L26_DBC_TX_LVL_THRESH_FS] = CS40L26_DBC_DEFAULT;
+		cs40l26->dbc_defaults[CS40L26_DBC_TX_LVL_THRESH_FS] = CS40L26_DBC_USE_DEFAULT;
 
 	cs40l26->pwle_zero_cross = device_property_present(dev, "cirrus,pwle-zero-cross-en");
 
@@ -5014,8 +4894,11 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 
 	gpiod_set_value_cansleep(cs40l26->reset_gpio, 1);
 
-	if (cs40l26->vibe_init_success)
-		sysfs_remove_groups(&cs40l26->input->dev.kobj, cs40l26_attr_groups);
+	if (cs40l26->vibe_init_success) {
+		sysfs_remove_group(&cs40l26->input->dev.kobj, &cs40l26_dev_attr_group);
+		sysfs_remove_group(&cs40l26->input->dev.kobj, &cs40l26_dev_attr_cal_group);
+		sysfs_remove_group(&cs40l26->input->dev.kobj, &cs40l26_dev_attr_dbc_group);
+	}
 
 #ifdef CONFIG_DEBUG_FS
 	cs40l26_debugfs_cleanup(cs40l26);
