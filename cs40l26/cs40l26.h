@@ -43,15 +43,8 @@
 #include <sound/soc.h>
 #include <sound/initval.h>
 #include <sound/tlv.h>
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-#include <trace/hooks/systrace.h>
-#endif
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-#include "cl_dsp.h"
-#else
 #include <linux/firmware/cirrus/cl_dsp.h>
-#endif
 
 #define CS40L26_LASTREG					0x3C7DFE8
 
@@ -140,14 +133,7 @@
 #define CS40L26_SPK_DEFAULT_HIZ_SHIFT				28
 
 /* Device */
-#ifdef CONFIG_GOOG_CUST
-#define CS40L26_MAX_DEVICES		2
-#define CS40L26_MAX_PROBE_RETRY		2
-#endif
 #define CS40L26_DEV_NAME		"CS40L26"
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-#define CS40L26_INPUT_DEV_NAME		"cs40l26_input"
-#endif
 #define CS40L26_DEVID_A			0x40A260
 #define CS40L26_DEVID_B			0x40A26B
 #define CS40L26_DEVID_L27_A		0x40A270
@@ -314,11 +300,7 @@
 /* DSP mailbox controls */
 #define CS40L26_DSP_TIMEOUT_US_MIN		1000
 #define CS40L26_DSP_TIMEOUT_US_MAX		1100
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-#define CS40L26_DSP_TIMEOUT_COUNT		3
-#else
 #define CS40L26_DSP_TIMEOUT_COUNT		100
-#endif
 
 #define CS40L26_DSP_MBOX_CMD_HIBER		0x02000001
 #define CS40L26_DSP_MBOX_CMD_WAKEUP		0x02000002
@@ -1137,11 +1119,6 @@ struct cs40l26_private {
 	u32 aux_ng_thld;
 	u32 aux_ng_delay;
 	bool aux_ng_enable;
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-	const char *device_name;
-	bool cs40l26_not_probed;
-	u8 device_id;
-#endif
 };
 
 struct cs40l26_codec {
@@ -1197,11 +1174,6 @@ bool cs40l26_volatile_reg(struct device *dev, unsigned int reg);
 int cs40l26_pseq_write(struct cs40l26_private *cs40l26, u32 addr, u32 data, bool update,
 		u8 op_code);
 int cs40l26_copy_f0_est_to_dvl(struct cs40l26_private *cs40l26);
-
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-static int cs40l26_probed_retry_count[CS40L26_MAX_DEVICES];
-void cs40l26_add_codec_devices(struct device *dev);
-#endif
 
 /* external tables */
 extern struct regulator_bulk_data cs40l26_supplies[CS40L26_NUM_SUPPLIES];
