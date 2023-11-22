@@ -10,11 +10,7 @@
 // it under the terms of the GNU General Public License version 2 as
 // published by the Free Software Foundation.
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 #include "cs40l26.h"
-#else
-#include <linux/mfd/cs40l26.h>
-#endif
 
 static const struct i2c_device_id cs40l26_id_i2c[] = {
 	{"cs40l26a", 0},
@@ -34,12 +30,15 @@ static const struct of_device_id cs40l26_of_match[CS40L26_NUM_DEVS + 1] = {
 };
 MODULE_DEVICE_TABLE(of, cs40l26_of_match);
 
-static int cs40l26_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int cs40l26_i2c_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
+	int ret;
 	struct cs40l26_private *cs40l26;
-	int error;
+	struct device *dev = &client->dev;
+	struct cs40l26_platform_data *pdata = dev_get_platdata(dev);
 
-	cs40l26 = devm_kzalloc(&client->dev, sizeof(struct cs40l26_private), GFP_KERNEL);
+	cs40l26 = devm_kzalloc(dev, sizeof(struct cs40l26_private), GFP_KERNEL);
 	if (!cs40l26)
 		return -ENOMEM;
 
@@ -47,31 +46,31 @@ static int cs40l26_i2c_probe(struct i2c_client *client, const struct i2c_device_
 
 	cs40l26->regmap = devm_regmap_init_i2c(client, &cs40l26_regmap);
 	if (IS_ERR(cs40l26->regmap)) {
-		error = PTR_ERR(cs40l26->regmap);
-		dev_err(&client->dev, "Failed to allocate register map: %d\n", error);
-		return error;
+		ret = PTR_ERR(cs40l26->regmap);
+		dev_err(dev, "Failed to allocate register map: %d\n", ret);
+		return ret;
 	}
 
-	cs40l26->dev = &client->dev;
+	cs40l26->dev = dev;
 	cs40l26->irq = client->irq;
 
 #if IS_ENABLED(CONFIG_GOOG_CUST)
-	error = cs40l26_probe(cs40l26);
-	if ((error != 0) && (error != -ENOMEM)) {
+	ret = cs40l26_probe(cs40l26, pdata);
+	if ((ret != 0) && (ret != -ENOMEM)) {
 		if (++cs40l26_probed_retry_count[cs40l26->device_id] ==
 				CS40L26_MAX_PROBE_RETRY) {
-			dev_err(&client->dev, "Failed to probe.\n");
+			dev_err(dev, "Failed to probe.\n");
 			cs40l26->cs40l26_not_probed = true;
-			cs40l26_add_codec_devices(&client->dev);
+			cs40l26_add_codec_devices(dev);
 			return 0;
 		}
 
-		dev_err(&client->dev, "Failed to probe. Try to defer probe: %d\n", error);
-		error = -EPROBE_DEFER;
+		dev_err(dev, "Failed to probe. Try to defer probe: %d\n", ret);
+		ret = -EPROBE_DEFER;
 	}
-	return error;
+	return ret;
 #else
-	return cs40l26_probe(cs40l26);
+	return cs40l26_probe(cs40l26, pdata);
 #endif
 }
 
