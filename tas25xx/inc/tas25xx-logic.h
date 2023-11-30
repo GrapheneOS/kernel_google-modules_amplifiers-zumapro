@@ -37,5 +37,6 @@ void tas25xx_log_interrupt_stats(struct tas25xx_priv *p_tas25xx);
 void tas25xx_clear_interrupt_stats(struct tas25xx_priv *p_tas25xx);
 #endif /* CONFIG_TAS25XX_IRQ_BD */
 
+int tas25xx_get_drv_channel_opmode(void);
 
 #endif /*__TAS25XX_LOGIC_*/

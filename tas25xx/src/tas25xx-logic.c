@@ -14,6 +14,7 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  *
  */
+#include <linux/power_supply.h>
 #include "inc/tas25xx-logic.h"
 #include "inc/tas25xx-device.h"
 #if IS_ENABLED(CONFIG_TAS25XX_ALGO)
@@ -25,6 +26,10 @@
 #endif /* CONFIG_TAS25XX_ALGO*/
 #include "inc/tas25xx-regmap.h"
 #include "inc/tas25xx-regbin-parser.h"
+
+#ifndef DEFAULT_AMBIENT_TEMP
+#define DEFAULT_AMBIENT_TEMP 20
+#endif
 
 /* 128 Register Map to be used during Register Dump*/
 #define REG_CAP_MAX	128
@@ -372,7 +377,7 @@ static int tas25xx_reinit(struct tas25xx_priv *p_tas25xx)
 	if (ret)
 		goto reinit_done;
 
-	ret = tas25xx_update_kcontrol_data(p_tas25xx);
+	ret = tas25xx_update_kcontrol_data(p_tas25xx, KCNTR_ANYTIME);
 	if (ret)
 		goto reinit_done;
 
@@ -710,7 +715,6 @@ static int tas_smartamp_add_irq_bd(struct tas25xx_priv *p_tas25xx)
 	struct attribute **attribute_array;
 	struct tas25xx_intr_info *intr_info;
 	struct tas25xx_interrupts *intr_data;
-	struct class *bd_class;
 	struct device *irq_dev;
 
 	for (i = 0; i < p_tas25xx->ch_count; i++) {
@@ -743,16 +747,7 @@ static int tas_smartamp_add_irq_bd(struct tas25xx_priv *p_tas25xx)
 	}
 	s_attribute_group.attrs = attribute_array;
 
-	bd_class = class_create(THIS_MODULE, "tas25xx_dev");
-	if (IS_ERR(bd_class)) {
-		ret = PTR_ERR(bd_class);
-		dev_err(plat_data->dev,
-			"%s err class create\n", __func__);
-		bd_class = NULL;
-		goto err_irqbd;
-	}
-
-	irq_dev = device_create(bd_class,
+	irq_dev = device_create(p_tas25xx->class,
 				NULL, 1, NULL, "irqs");
 	if (IS_ERR(irq_dev)) {
 		dev_err(plat_data->dev,
@@ -772,7 +767,6 @@ static int tas_smartamp_add_irq_bd(struct tas25xx_priv *p_tas25xx)
 
 	p_tas25xx->irqdata.p_dev_attr = p_irqpd;
 	p_tas25xx->irqdata.p_attr_arr = attribute_array;
-	p_tas25xx->irqdata.bd_class = bd_class;
 	p_tas25xx->irqdata.irq_dev = irq_dev;
 
 	dev_set_drvdata(irq_dev, p_tas25xx);
@@ -791,22 +785,280 @@ static void tas_smartamp_remove_irq_bd(struct tas25xx_priv *p_tas25xx)
 {
 	struct irq_bigdata *bd = &p_tas25xx->irqdata;
 
-	if (bd->irq_dev) {
+	if (bd->irq_dev)
 		sysfs_remove_group(&bd->irq_dev->kobj,
 			&s_attribute_group);
-		device_destroy(bd->bd_class, 1);
-	}
-
-	if (bd->bd_class)
-		class_destroy(bd->bd_class);
 
 	kfree(bd->p_dev_attr);
 	kfree(bd->p_attr_arr);
 
-	/* reset all pointers */
 	memset(bd, 0, sizeof(struct irq_bigdata));
 }
 #endif
+
+enum cmd_type_t {
+	CALIB,
+	TEMP,
+	IV_VBAT,
+	DRV_OPMODE,
+};
+
+static const char *cmd_str_arr[MAX_CMD_LIST] = {
+	"calib",
+	"temp",
+	"iv_vbat",
+	"drv_opmode",
+	NULL,
+};
+
+static struct device_attribute *cmd_arr[MAX_CMD_LIST] = {
+	NULL,
+};
+
+static uint8_t tas25xx_get_amb_temp(void)
+{
+	struct power_supply *psy;
+	union power_supply_propval value = {0};
+
+	psy = power_supply_get_by_name("battery");
+	if (!psy || !psy->desc || !psy->desc->get_property) {
+		pr_err("[TI-SmartPA:%s] getting ambient temp failed, using default value %d\n",
+			__func__, DEFAULT_AMBIENT_TEMP);
+		return DEFAULT_AMBIENT_TEMP;
+	}
+	psy->desc->get_property(psy, POWER_SUPPLY_PROP_TEMP, &value);
+
+	return DIV_ROUND_CLOSEST(value.intval, 10);
+}
+
+static ssize_t cmd_show(struct device *dev,
+		struct device_attribute *attr,
+		char *buf)
+{
+	int32_t i, cmd_count, found = 0, ret = -EINVAL, temp;
+
+	struct tas25xx_priv *p_tas25xx = dev_get_drvdata(dev);
+
+	if (!p_tas25xx) {
+		dev_info(dev,
+			"%s get_drvdata returned NULL", __func__);
+		return ret;
+	}
+
+	cmd_count = ARRAY_SIZE(cmd_arr);
+
+	for (i = 0; i < cmd_count; i++) {
+		if (attr == cmd_arr[i]) {
+			found = 1;
+			break;
+		}
+	}
+
+	if (found) {
+		switch (i) {
+		case TEMP:
+			temp = tas25xx_get_amb_temp();
+			ret = snprintf(buf, 32, "%d", temp);
+		break;
+
+		case IV_VBAT:
+			temp = ((p_tas25xx->curr_mn_iv_width & 0xFFFF) |
+				((p_tas25xx->curr_mn_vbat & 0xFFFF) << 16));
+			ret = snprintf(buf, 32, "0x%x", temp);
+		break;
+
+		case DRV_OPMODE:
+			temp = tas25xx_get_drv_channel_opmode();
+			ret = snprintf(buf, 32, "0x%x", temp);
+		break;
+
+		default:
+			ret = snprintf(buf, 32, "unsupported cmd %d", i);
+		break;
+		}
+	}
+
+	return ret;
+}
+
+static ssize_t cmd_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	int32_t i, cmd_count, found = 0, ret = -EINVAL;
+	struct tas25xx_priv *p_tas25xx = dev_get_drvdata(dev);
+
+	if (!p_tas25xx) {
+		dev_info(dev, "%s drv_data is null", __func__);
+		return ret;
+	}
+
+	cmd_count = ARRAY_SIZE(cmd_arr);
+
+	for (i = 0; i < cmd_count; i++) {
+		if (attr == cmd_arr[i]) {
+			found = 1;
+			break;
+		}
+	}
+
+	if (found) {
+		if (i == CALIB) {
+			if (!strncmp(buf, "cal_init_blk", strlen("cal_init_blk")))
+				tas25xx_prep_dev_for_calib(1);
+			else if (!strncmp(buf, "cal_deinit_blk", strlen("cal_deinit_blk")))
+				tas25xx_prep_dev_for_calib(0);
+			else
+				dev_info(dev,
+					"%s Not supported %s, for calib", __func__, buf);
+		} else {
+			dev_info(dev, "%s Not supported %s", __func__, buf);
+		}
+	} else {
+		dev_info(dev, "%s Not supported %s", __func__, buf);
+	}
+
+	return size;
+}
+
+static struct attribute_group cmd_attribute_group = {
+	.attrs = NULL,
+};
+
+static int tas_smartamp_add_cmd_intf(struct tas25xx_priv *p_tas25xx)
+{
+	int i, cmd_count, ret;
+	struct linux_platform *plat_data =
+		(struct linux_platform *) p_tas25xx->platform_data;
+	struct device_attribute *p_attr_arr;
+	struct attribute **attr_arry;
+	struct device *cmd_dev;
+
+	cmd_count = ARRAY_SIZE(cmd_arr);
+
+	p_attr_arr = (struct device_attribute *)kzalloc(cmd_count *
+			sizeof(struct device_attribute), GFP_KERNEL);
+	if (!p_attr_arr) {
+		attr_arry = NULL;
+		ret = -ENOMEM;
+		goto err_cmd;
+	}
+
+	attr_arry = kzalloc((sizeof(struct attribute *) *
+					cmd_count), GFP_KERNEL);
+	if (!attr_arry) {
+		ret = -ENOMEM;
+		goto err_cmd;
+	}
+
+	for (i = 0; (i < cmd_count) && cmd_str_arr[i]; i++) {
+		p_attr_arr[i].attr.name = cmd_str_arr[i];
+		p_attr_arr[i].attr.mode = 0664;
+		p_attr_arr[i].show = cmd_show;
+		p_attr_arr[i].store = cmd_store;
+
+		cmd_arr[i] = &p_attr_arr[i];
+		attr_arry[i] = &p_attr_arr[i].attr;
+	}
+	cmd_attribute_group.attrs = attr_arry;
+
+	cmd_dev = device_create(p_tas25xx->class,
+				NULL, 1, NULL, "cmd");
+	if (IS_ERR(cmd_dev)) {
+		dev_err(plat_data->dev,
+			"%sFailed to create cmds\n", __func__);
+		ret = PTR_ERR(cmd_dev);
+		goto err_cmd;
+	}
+
+	ret = sysfs_create_group(&cmd_dev->kobj,
+		&cmd_attribute_group);
+	if (ret) {
+		dev_err(plat_data->dev,
+			"%s Failed to create sysfs group\n", __func__);
+		goto err_cmd;
+	}
+
+	p_tas25xx->cmd_data.p_dev_attr = p_attr_arr;
+	p_tas25xx->cmd_data.p_attr_arr = attr_arry;
+	p_tas25xx->cmd_data.cmd_dev = cmd_dev;
+
+	dev_set_drvdata(cmd_dev, p_tas25xx);
+
+	dev_info(plat_data->dev, "%s ret=%d\n", __func__, ret);
+
+	return ret;
+
+err_cmd:
+	kfree(p_attr_arr);
+	kfree(attr_arry);
+	return ret;
+}
+
+static void tas_smartamp_remove_cmd_intf(struct tas25xx_priv *p_tas25xx)
+{
+	struct cmd_data *cmd_data = &p_tas25xx->cmd_data;
+
+	if (cmd_data->cmd_dev) {
+		sysfs_remove_group(&cmd_data->cmd_dev->kobj,
+			&cmd_attribute_group);
+	}
+
+	kfree(cmd_data->p_dev_attr);
+	kfree(cmd_data->p_attr_arr);
+
+	memset(cmd_data, 0, sizeof(struct cmd_data));
+}
+
+static int tas_smartamp_add_sysfs(struct tas25xx_priv *p_tas25xx)
+{
+	int ret = 0;
+	struct class *class = NULL;
+	struct linux_platform *plat_data =
+		(struct linux_platform *) p_tas25xx->platform_data;
+
+	class = class_create(THIS_MODULE, "tas25xx_dev");
+	if (IS_ERR(class)) {
+		ret = PTR_ERR(class);
+		dev_err(plat_data->dev,
+			"%s err class create %d\n", __func__, ret);
+		class = NULL;
+	}
+
+	if (class) {
+		p_tas25xx->class = class;
+#if IS_ENABLED(CONFIG_TAS25XX_IRQ_BD)
+		ret = tas_smartamp_add_irq_bd(p_tas25xx);
+		if (ret)
+			dev_err(plat_data->dev,
+				"%s err registring irqbd %d\n", __func__, ret);
+#endif
+		tas_smartamp_add_cmd_intf(p_tas25xx);
+	}
+
+	return ret;
+}
+
+static void tas_smartamp_remove_sysfs(struct tas25xx_priv *p_tas25xx)
+{
+#if IS_ENABLED(CONFIG_TAS25XX_IRQ_BD)
+	struct linux_platform *plat_data =
+		(struct linux_platform *) p_tas25xx->platform_data;
+#endif
+
+	tas_smartamp_remove_cmd_intf(p_tas25xx);
+#if IS_ENABLED(CONFIG_TAS25XX_IRQ_BD)
+	tas_smartamp_remove_irq_bd(p_tas25xx);
+	dev_info(plat_data->dev,
+			"%s de-registring irqbd done\n", __func__);
+#endif
+
+	if (p_tas25xx->class) {
+		device_destroy(p_tas25xx->class, 1);
+		class_destroy(p_tas25xx->class);
+		p_tas25xx->class = NULL;
+	}
+}
 
 int tas25xx_probe(struct tas25xx_priv *p_tas25xx)
 {
@@ -818,23 +1070,25 @@ int tas25xx_probe(struct tas25xx_priv *p_tas25xx)
 
 	for (i = 0; i < p_tas25xx->ch_count; i++) {
 		ret = tas25xx_set_init_params(p_tas25xx, i);
-		if (ret < 0)
+		if (ret < 0) {
+			dev_err(plat_data->dev, "%s err=%d, initialisation",
+				__func__, ret);
 			goto end;
+		}
 	}
 
-	dev_info(plat_data->dev, "%s: Creating controls\n", __func__);
 	ret = tas25xx_create_kcontrols(p_tas25xx);
-	if (ret)
-		dev_err(plat_data->dev, "%s err=%d creating controls",
+	if (ret) {
+		dev_warn(plat_data->dev, "%s err=%d creating controls",
 			__func__, ret);
+		ret = 0;
+	}
 
 #if IS_ENABLED(CONFIG_TAS25XX_ALGO)
 	tas_smartamp_add_algo_controls(plat_data->codec, plat_data->dev,
 		p_tas25xx->ch_count);
 #endif
-#if IS_ENABLED(CONFIG_TAS25XX_IRQ_BD)
-	tas_smartamp_add_irq_bd(p_tas25xx);
-#endif
+	tas_smartamp_add_sysfs(p_tas25xx);
 
 end:
 	return ret;
@@ -849,9 +1103,7 @@ void tas25xx_remove(struct tas25xx_priv *p_tas25xx)
 #endif
 	/* REGBIN related */
 	tas25xx_remove_binfile(p_tas25xx);
-#if IS_ENABLED(CONFIG_TAS25XX_IRQ_BD)
-	tas_smartamp_remove_irq_bd(p_tas25xx);
-#endif
+	tas_smartamp_remove_sysfs(p_tas25xx);
 }
 
 int tas25xx_set_power_state(struct tas25xx_priv *p_tas25xx,
@@ -888,6 +1140,7 @@ int tas25xx_set_power_state(struct tas25xx_priv *p_tas25xx,
 				dev_err(plat_data->dev, "ch=%d %s setting power state failed, err=%d\n",
 					i, __func__, ret);
 			} else {
+				ret = tas25xx_update_kcontrol_data(p_tas25xx, KCNTR_PRE_POWERUP);
 				p_tas25xx->schedule_init_work(p_tas25xx, i);
 			}
 		}

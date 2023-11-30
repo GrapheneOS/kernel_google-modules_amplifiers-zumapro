@@ -53,9 +53,15 @@
 #define TX_SLOTLEN_24	1
 #define TX_SLOTLEN_32	2
 
-#define SUPPORTED_BIN_VERSION 6
+#define SUPPORTED_BIN_VERSION 7
 
 #define TAS25XX_DEFAULT	0xFFFFFFFF
+
+enum kcntl_during_t {
+	KCNTR_ANYTIME = 0, /* instant update */
+	KCNTR_PRE_POWERUP = 1, /* during pre-power up */
+	KCNTR_POST_POWERUP = 2, /* during post-power up */
+};
 
 struct default_hw_params {
 	char sample_rate;
@@ -85,7 +91,7 @@ struct bin_header {
 	u32 features;
 } __attribute__((packed));
 
-int32_t tas25xx_load_binfile(struct tas25xx_priv *p_tas25xx);
+int32_t tas25xx_load_firmware(struct tas25xx_priv *p_tas25xx, int max_retry_count);
 int32_t tas25xx_create_kcontrols(struct tas25xx_priv *p_tas25xx);
 int32_t tas25xx_remove_binfile(struct tas25xx_priv *p_tas25xx);
 int32_t tas25xx_set_init_params(struct tas25xx_priv *p_tas25xx, int32_t ch);
@@ -107,6 +113,7 @@ int32_t tas25xx_process_block(struct tas25xx_priv *p_tas25xx, char *mem, int32_t
 int32_t tas25xx_check_if_powered_on(struct tas25xx_priv *p_tas25xx, int *state, int ch);
 int tas_write_init_config_params(struct tas25xx_priv *p_tas25xx, int number_of_channels);
 
-int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx);
+int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx, enum kcntl_during_t cur_state);
 
+void tas25xx_prep_dev_for_calib(int start);
 #endif /* __TAS25XX_REGBIN_PARSER__ */

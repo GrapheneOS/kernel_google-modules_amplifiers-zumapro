@@ -19,4 +19,7 @@ struct linux_platform {
 void tas25xx_select_cfg_blk(void *pContext, int conf_no,
 	unsigned char block_type);
 void tas25xx_dump_regs(struct tas25xx_priv  *p_tas25xx, int chn);
+
+
+void tas25xx_register_i2c_error_callback(void (*i2c_err_cb)(uint32_t));
 #endif /*__TAS25XX_REGMAP__*/

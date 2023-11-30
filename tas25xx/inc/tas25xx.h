@@ -25,7 +25,7 @@
 #include <sound/soc.h>
 #include <linux/version.h>
 
-#define TAS25XX_DRIVER_TAG  "UDA_0.0.16_K5.15"
+#define TAS25XX_DRIVER_TAG  "UDA_0.0.19_3_K6.1"
 
 #define MAX_CHANNELS	2
 
@@ -48,6 +48,9 @@
 /* Book */
 #define TAS25XX_BOOK  TAS25XX_REG(0x0, 0x0, 0x7F)
 #define TAS25XX_BOOK_BOOK70_MASK  (0xff << 0)
+
+/* Rev Info */
+#define TAS25XX_REVID_REG TAS25XX_REG(0x0, 0x0, 0x78)
 
 /* data format */
 #define TAS25XX_DATAFORMAT_SHIFT  2
@@ -89,6 +92,7 @@
 #define RX_SCFG_RIGHT  0x10000004
 
 #define RESTART_MAX  3
+#define MAX_CMD_LIST 5 /* sysfs cmd nodes */
 
 struct tas25xx_priv;
 struct snd_soc_component;
@@ -120,6 +124,8 @@ struct snd_soc_component;
 #define CMD_UPDATE_BITS_SZ  7
 #define CMD_DELAY_SZ		5
 
+#define DSP_FW_LOAD_NTRIES  20
+
 enum tas_power_states_t {
 	TAS_POWER_ACTIVE = 0,
 	TAS_POWER_MUTE = 1,
@@ -128,8 +134,9 @@ enum tas_power_states_t {
 
 enum tas25xx_dsp_fw_state {
 	TAS25XX_DSP_FW_NONE = 0,
-	TAS25XX_DSP_FW_PENDING,
-	TAS25XX_DSP_FW_FAIL,
+	TAS25XX_DSP_FW_TRYLOAD,
+	TAS25XX_DSP_FW_PARSE_FAIL,
+	TAS25XX_DSP_FW_LOAD_FAIL,
 	TAS25XX_DSP_FW_OK,
 };
 
@@ -169,9 +176,9 @@ int tas25xx_load_container(struct tas25xx_priv *pTAS256x);
 void tas25xx_config_info_remove(void *pContext);
 
 struct tas25xx_register {
-int book;
-int page;
-int reg;
+	int book;
+	int page;
+	int reg;
 };
 
 /* Used for Register Dump */
@@ -304,10 +311,15 @@ struct tas_block_op_data_t {
 struct irq_bigdata {
 	struct device_attribute *p_dev_attr;
 	struct attribute **p_attr_arr;
-	struct class *bd_class;
 	struct device *irq_dev;
 };
 #endif
+
+struct cmd_data {
+	struct device_attribute *p_dev_attr;
+	struct attribute **p_attr_arr;
+	struct device *cmd_dev;
+};
 
 struct tas25xx_priv {
 	struct linux_platform *platform_data;
@@ -373,20 +385,25 @@ struct tas25xx_priv {
 	struct delayed_work irq_work;
 	struct delayed_work dc_work;
 	int iv_enable;
+	uint32_t dev_revid;
 	uint32_t fw_size;
 	uint8_t *fw_data;
-	struct delayed_work fw_init_work;
+	struct delayed_work post_fw_load_work;
+	struct delayed_work fw_load_work;
 	wait_queue_head_t fw_wait;
+	int fw_load_retry_count;
 	atomic_t fw_state;
 	atomic_t fw_wait_complete;
-	wait_queue_head_t init_writes_wait;
-	atomic_t init_writes_complete;
+	wait_queue_head_t dev_init_wait;
+	atomic_t dev_init_status;
 	int device_used;
 	int irq_enabled[MAX_CHANNELS];
 	struct tas25xx_interrupts intr_data[MAX_CHANNELS];
 #if IS_ENABLED(CONFIG_TAS25XX_IRQ_BD)
 	struct irq_bigdata irqdata;
 #endif
+	struct class *class;
+	struct cmd_data cmd_data;
 	struct tas_block_op_data_t block_op_data[MAX_CHANNELS];
 };
 

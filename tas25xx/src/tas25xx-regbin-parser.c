@@ -26,9 +26,12 @@
 
 #define TAS25XX_BINFILE_NAME	"tismartpa_driver_tuning.bin"
 
+#define MDATA_HDR_SZ 9
+#define ONE_BIN_MD_SZ 20
 #define HDR_STR_SZ	5
 #define MAIN_BLOCK_SIZE 5
 #define ANY_CHANNEL 0xffffffff
+#define MDATA "MDATA"
 #define HEADER "HEADR"
 #define INITP_STR "INITP"
 #define INTRP_STR  "INTRP"
@@ -114,6 +117,7 @@ struct tas25xx_kcontrol_int {
 	int32_t def;
 	int32_t count;
 	int32_t curr_val;
+	uint32_t misc_info; /* additional info regarding kcontrol */
 	char *chardata;
 	int32_t *intdata;
 	struct soc_mixer_control mctl;
@@ -130,6 +134,7 @@ struct tas25xx_kcontrol_enum {
 	char def;
 	int32_t count;
 	int32_t curr_val;
+	uint32_t misc_info; /* additional info regarding kcontrol */
 	struct tas25xx_kcontrol_enum_data *data;
 	char **enum_texts;
 	struct soc_enum tas25xx_kcontrol_enum;
@@ -1262,6 +1267,7 @@ static int32_t tas25xx_put(struct snd_kcontrol *kcontrol,
 	struct linux_platform *plat_data = NULL;
 	int32_t ret = -EINVAL;
 	int32_t curr_kcontrol = 0;
+	uint32_t misc_info;
 
 	if ((codec == NULL) || (mc == NULL)) {
 		pr_err("tas25xx: %s:codec or control is NULL\n", __func__);
@@ -1276,16 +1282,25 @@ static int32_t tas25xx_put(struct snd_kcontrol *kcontrol,
 
 	plat_data = (struct linux_platform *) p_tas25xx->platform_data;
 
+	mutex_lock(&p_tas25xx->codec_lock);
+
 	curr_kcontrol = mc->reg;
 	if (curr_kcontrol < g_no_of_kcontrols) {
 		int32_t value_idx = ucontrol->value.integer.value[0];
+		misc_info = g_kctrl_data[curr_kcontrol].kcontrol.int_type.misc_info;
 
-		ret = tas25xx_int_put_idx_value(p_tas25xx, curr_kcontrol, value_idx);
+		if (((misc_info & 0xf) == KCNTR_ANYTIME) ||
+						(p_tas25xx->m_power_state == TAS_POWER_ACTIVE))
+			ret = tas25xx_int_put_idx_value(p_tas25xx, curr_kcontrol, value_idx);
+		else
+			ret = 0;
+
 		if (!ret)
 			g_kctrl_data[curr_kcontrol].kcontrol.int_type.curr_val = value_idx;
 	} else {
 		dev_err(plat_data->dev, "tas25xx:%s invalid kcontrol %d\n", __func__, curr_kcontrol);
 	}
+	mutex_unlock(&p_tas25xx->codec_lock);
 
 	return ret;
 }
@@ -1352,6 +1367,7 @@ static int32_t tas25xx_enum_put(struct snd_kcontrol *kcontrol,
 	//struct linux_platform *plat_data = NULL;
 	int32_t ret = -EINVAL;
 	int32_t i = 0;
+	uint32_t misc_info;
 
 	if ((codec == NULL) || (mc == NULL)) {
 		pr_err("%s:codec or control is NULL\n", __func__);
@@ -1365,19 +1381,31 @@ static int32_t tas25xx_enum_put(struct snd_kcontrol *kcontrol,
 	}
 	//plat_data = (struct linux_platform *) p_tas25xx->platform_data;
 
+	mutex_lock(&p_tas25xx->codec_lock);
+
 	while (i < g_no_of_kcontrols) {
 		if (g_kctrl_data[i].type == 1) {
 			if (strnstr(ucontrol->id.name,
 						g_kctrl_data[i].kcontrol.enum_type.name, 64)) {
 				int32_t v_idx = ucontrol->value.integer.value[0];
-				ret = tas25xx_enum_put_idx_value(p_tas25xx, i, v_idx);
+				misc_info = g_kctrl_data[i].kcontrol.enum_type.misc_info;
+
+				/* check if it needs to be updated now */
+				if (((misc_info & 0xf) == KCNTR_ANYTIME) ||
+						(p_tas25xx->m_power_state == TAS_POWER_ACTIVE))
+					ret = tas25xx_enum_put_idx_value(p_tas25xx, i, v_idx);
+				else
+					ret = 0; /* mixer control will be updated during power up */
+
 				if (!ret)
-					g_kctrl_data[i].kcontrol.enum_type.curr_val =
-							ucontrol->value.integer.value[0];
+					g_kctrl_data[i].kcontrol.enum_type.curr_val = v_idx;
 			}
 		}
 		i++;
 	}
+
+	mutex_unlock(&p_tas25xx->codec_lock);
+
 	return ret;
 }
 
@@ -1385,11 +1413,15 @@ static int32_t tas25xx_enum_put(struct snd_kcontrol *kcontrol,
  * Helper function to update the kcontrol local values to device
  * when something like SW/HW reset happens.
  */
-int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx)
+int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx,
+	enum kcntl_during_t cur_state)
 {
 	int ret = -EINVAL;
-	int i = 0;
+	int i = 0, kcntrl_type, misc_info;
+	char *name = NULL;
 	struct linux_platform *plat_data = NULL;
+	struct tas25xx_kcontrol_int *int_type;
+	struct tas25xx_kcontrol_enum *enum_type;
 
 	if (!p_tas25xx || !g_kctrl_data) {
 		pr_err("%s: p_tas25xx=%p g_kctrl_data=%p\n",
@@ -1405,35 +1437,44 @@ int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx)
 	dev_info(plat_data->dev, "%s updating the kcontrol data", __func__);
 
 	for (i = 0; i < g_no_of_kcontrols; ++i) {
-		switch (g_kctrl_data[i].type) {
+		kcntrl_type = g_kctrl_data[i].type;
+		ret = 0;
+
+		switch (kcntrl_type) {
 		/* integer */
 		case 0:
-			ret = tas25xx_int_put_idx_value(p_tas25xx, i,
-				g_kctrl_data[i].kcontrol.int_type.curr_val);
-			if (ret) {
-				dev_err(plat_data->dev,
-					"%s error updating mixer ctrl data for int type\n", __func__);
-			}
+			int_type = &g_kctrl_data[i].kcontrol.int_type;
+			misc_info = int_type->misc_info;
+			name = int_type->name;
+			if (cur_state == (misc_info & 0xf))
+				ret = tas25xx_int_put_idx_value(p_tas25xx, i,
+					int_type->curr_val);
 			break;
 
 		/* enum */
 		case 1:
-			ret = tas25xx_enum_put_idx_value(p_tas25xx, i,
-				g_kctrl_data[i].kcontrol.enum_type.curr_val);
-			if (ret) {
-				dev_err(plat_data->dev,
-					"%s error updating mixer ctrl data for enum type\n", __func__);
-			}
+			enum_type = &g_kctrl_data[i].kcontrol.enum_type;
+			misc_info = enum_type->misc_info;
+			name = enum_type->name;
+			if (cur_state == (misc_info & 0xf))
+				ret = tas25xx_enum_put_idx_value(p_tas25xx, i,
+					enum_type->curr_val);
 			break;
 
 		default:
-			dev_err(plat_data->dev, "%s non supported kcontrol type\n", __func__);
+			name = NULL;
+			dev_err(plat_data->dev,
+				"%s non supported kcontrol type\n", __func__);
 			ret = -EINVAL;
 			break;
 
 		}
-		if (ret)
-			break;
+
+		if (ret) {
+			dev_err(plat_data->dev, "%s %s mixer ctrl update err=%d\n",
+				__func__, name ? name : "", ret);
+			continue;
+		}
 	}
 
 	return ret;
@@ -1557,6 +1598,11 @@ static int32_t tas25xx_parse_kcontrols(struct tas25xx_priv *p_tas25xx, uint8_t *
 			buf += 4;
 			memcpy(&(g_kctrl_data[i].kcontrol.int_type.def), buf, 4);
 			buf += 4;
+			if (s_rbin.head.version > 6) {
+				memcpy(&(g_kctrl_data[i].kcontrol.int_type.misc_info), buf, 4);
+				buf += 4;
+			}
+
 			/* Assign default value to current value */
 			g_kctrl_data[i].kcontrol.int_type.curr_val = g_kctrl_data[i].kcontrol.int_type.def;
 			dev_info(plat_data->dev, "%s: curr_kcontrol [%s] = %d\n", __func__,
@@ -1587,6 +1633,10 @@ static int32_t tas25xx_parse_kcontrols(struct tas25xx_priv *p_tas25xx, uint8_t *
 			buf += 1;
 			memcpy(&(g_kctrl_data[i].kcontrol.enum_type.def), buf, 1);
 			buf += 1;
+			if (s_rbin.head.version > 6) {
+				memcpy(&(g_kctrl_data[i].kcontrol.enum_type.misc_info), buf, 4);
+				buf += 4;
+			}
 			g_kctrl_data[i].kcontrol.enum_type.curr_val =
 				g_kctrl_data[i].kcontrol.enum_type.def;
 			memcpy(&count, buf, 4);
@@ -1694,8 +1744,10 @@ static void tas25xx_update_custom_reg(struct tas25xx_priv *p_tas25xx, int ch)
 		p_tas25xx->update_bits(p_tas25xx, 0, 0xe, 0x3F, 0x04);
 
 		//VBAT
-		p_tas25xx->update_bits(p_tas25xx, 0, 0xf, 0x40, 0x00);
-		//p_tas25xx->update_bits(p_tas25xx, 0, 0xf, 0x3F, 0x04);
+		if (p_tas25xx->mn_vbat) {
+			p_tas25xx->update_bits(p_tas25xx, 0, 0xf, 0x40, 0x40);
+			p_tas25xx->update_bits(p_tas25xx, 0, 0xf, 0x3F, 0x06);
+		}
 	} else if (ch == 1) {
 		//VSNS
 		p_tas25xx->update_bits(p_tas25xx, 1, 0xd, 0x40, 0x40);
@@ -1706,42 +1758,104 @@ static void tas25xx_update_custom_reg(struct tas25xx_priv *p_tas25xx, int ch)
 		p_tas25xx->update_bits(p_tas25xx, 1, 0xe, 0x3F, 0x0c);
 
 		//VBAT
-		p_tas25xx->update_bits(p_tas25xx, 1, 0xf, 0x40, 0x00);
-		//p_tas25xx->update_bits(p_tas25xx, 1, 0xf, 0x3F, 0x04);
+		if (p_tas25xx->mn_vbat) {
+			p_tas25xx->update_bits(p_tas25xx, 1, 0xf, 0x40, 0x40);
+			p_tas25xx->update_bits(p_tas25xx, 1, 0xf, 0x3F, 0x0e);
+		}
 	}
 }
 
-static void tas25xx_binfile_ready(const struct firmware *pFW, void *pContext)
+static void tas25xx_fw_ready(const struct firmware *pFW, void *pContext)
 {
 	int32_t ret;
-	int32_t size;
+	uint32_t size;
 	int32_t i;
 	int32_t number_of_channels;
+	uint32_t rev_count;
+	uint32_t rev_id;
+	uint64_t file_offset;
 	struct tas25xx_priv *p_tas25xx = (struct tas25xx_priv *) pContext;
 	struct linux_platform *plat_data = NULL;
 	struct i2c_client *p_client = NULL;
 	uint8_t *bin_data = NULL;
+	uint8_t *mdata;
 
 	plat_data = (struct linux_platform *) p_tas25xx->platform_data;
 	p_client = container_of(plat_data->dev,
 		struct i2c_client, dev);
 
 	if (unlikely(!pFW) || unlikely(!pFW->data)) {
-		dev_err(plat_data->dev, "Bin file is not ready, %s\n", TAS25XX_BINFILE_NAME);
+		dev_err(plat_data->dev,
+			"firmware is not ready, %s\n", TAS25XX_BINFILE_NAME);
+		atomic_set(&p_tas25xx->fw_state, TAS25XX_DSP_FW_TRYLOAD);
 		goto EXIT;
 	}
 
 	dev_info(plat_data->dev, "%s: pFW->size %d", __func__, (int32_t)pFW->size);
+	atomic_set(&p_tas25xx->fw_state, TAS25XX_DSP_FW_PARSE_FAIL);
 
-	p_tas25xx->fw_data = kzalloc(pFW->size, GFP_KERNEL);
-	if (!p_tas25xx->fw_data) {
-		ret = -ENOMEM;
-		goto EXIT;
+	mdata = (uint8_t *)pFW->data;
+	if (header_check(p_tas25xx, MDATA, mdata)) {
+		dev_info(plat_data->dev, "%s: Found metadata, check against rev-id %d",
+			__func__, p_tas25xx->dev_revid);
+		file_offset = 0;
+		size = 0;
+		mdata += 5; /* header */
+		memcpy(&rev_count, mdata, sizeof(uint32_t));
+		mdata += 4; /* count */
+		for (i = 0; i < rev_count; i++) {
+			file_offset += size;
+
+			memcpy(&rev_id, mdata, sizeof(uint32_t));
+			mdata += 4; /* id */
+			memcpy(&size, mdata, sizeof(uint32_t));
+			mdata += 4; /* file sz */
+			/* dummy data */
+			mdata += 4;
+			mdata += 4;
+			mdata += 4;
+			dev_info(plat_data->dev, "%s: revid 0x%x, size=%d, offset=%llu",
+				__func__, rev_id, size, file_offset);
+			if (p_tas25xx->dev_revid == rev_id)
+				break;
+		}
+
+		if (i == rev_count) {
+			dev_info(plat_data->dev,
+				"%s: metadata parse failure...", __func__);
+			ret = -EINVAL;
+			goto EXIT;
+		} else {
+			dev_info(plat_data->dev,
+				"%s: using idx=%d revid 0x%x, size=%d", __func__, i, rev_id, size);
+			p_tas25xx->fw_data = kzalloc(size, GFP_KERNEL);
+			if (!p_tas25xx->fw_data) {
+				ret = -ENOMEM;
+				goto EXIT;
+			}
+
+			bin_data = (uint8_t *)pFW->data;
+			bin_data += MDATA_HDR_SZ;
+
+			/* first bin file */
+			bin_data += (rev_count * ONE_BIN_MD_SZ) + file_offset;
+
+
+			p_tas25xx->fw_size = size;
+			memcpy(p_tas25xx->fw_data, bin_data, size);
+		}
+
+	} else {
+		dev_info(plat_data->dev, "%s: metadata not found, regular fw", __func__);
+			p_tas25xx->fw_data = kzalloc(pFW->size, GFP_KERNEL);
+		if (!p_tas25xx->fw_data) {
+			ret = -ENOMEM;
+			goto EXIT;
+		}
+		p_tas25xx->fw_size = pFW->size;
+		memcpy(p_tas25xx->fw_data, pFW->data, pFW->size);
 	}
 
-	p_tas25xx->fw_size = pFW->size;
-
-	memcpy(p_tas25xx->fw_data, pFW->data, pFW->size);
 	bin_data = p_tas25xx->fw_data;
 
 	if (!header_check(p_tas25xx, HEADER, bin_data)) {
@@ -1791,23 +1905,24 @@ static void tas25xx_binfile_ready(const struct firmware *pFW, void *pContext)
 	dev_info(plat_data->dev, "%s: Vbat-mon %d", __func__, (int)s_rbin.head.vbat_mon);
 	p_tas25xx->mn_iv_width = p_tas25xx->curr_mn_iv_width = (int)s_rbin.head.iv_width;
 	p_tas25xx->mn_vbat = p_tas25xx->curr_mn_vbat = (int)s_rbin.head.vbat_mon;
-	dev_info(plat_data->dev, "%s: updating number of channels %d -> %d",
+	dev_dbg(plat_data->dev, "%s: updating number of channels %d -> %d",
 		__func__, p_tas25xx->ch_count, number_of_channels);
 	p_tas25xx->ch_count = number_of_channels;
 
-	dev_info(plat_data->dev, "%s: features %d", __func__, s_rbin.head.features);
-	dev_info(plat_data->dev, "%s: sample_rate %s", __func__, SampleRate[(int32_t)s_rbin.def_hw_params.sample_rate]);
-	dev_info(plat_data->dev, "%s: fmt_inv %s", __func__, FMT_INV[(int32_t)s_rbin.def_hw_params.fmt_inv]);
-	dev_info(plat_data->dev, "%s: fmt_mask %s", __func__, FMT_MASK[(int32_t)s_rbin.def_hw_params.fmt_mask]);
-	dev_info(plat_data->dev, "%s: rx_slots %s", __func__, RX_SLOTS[(int32_t)s_rbin.def_hw_params.rx_slots]);
-	dev_info(plat_data->dev, "%s: tx_slots %s", __func__, TX_SLOTS[(int32_t)s_rbin.def_hw_params.tx_slots]);
-	dev_info(plat_data->dev, "%s: rx_bitwidth %s", __func__, RX_SLOTS[(int32_t)s_rbin.def_hw_params.rx_bitwidth]);
-	dev_info(plat_data->dev, "%s: rx_slotlen %s", __func__, RX_SLOTS[(int32_t)s_rbin.def_hw_params.rx_slotlen]);
-	dev_info(plat_data->dev, "%s: tx_slotlen %s", __func__, TX_SLOTS[(int32_t)s_rbin.def_hw_params.tx_slotlen]);
+	dev_dbg(plat_data->dev, "%s: features %d", __func__, s_rbin.head.features);
+	dev_dbg(plat_data->dev, "%s: sample_rate %s", __func__, SampleRate[(int32_t)s_rbin.def_hw_params.sample_rate]);
+	dev_dbg(plat_data->dev, "%s: fmt_inv %s", __func__, FMT_INV[(int32_t)s_rbin.def_hw_params.fmt_inv]);
+	dev_dbg(plat_data->dev, "%s: fmt_mask %s", __func__, FMT_MASK[(int32_t)s_rbin.def_hw_params.fmt_mask]);
+	dev_dbg(plat_data->dev, "%s: rx_slots %s", __func__, RX_SLOTS[(int32_t)s_rbin.def_hw_params.rx_slots]);
+	dev_dbg(plat_data->dev, "%s: tx_slots %s", __func__, TX_SLOTS[(int32_t)s_rbin.def_hw_params.tx_slots]);
+	dev_dbg(plat_data->dev, "%s: rx_bitwidth %s", __func__, RX_SLOTS[(int32_t)s_rbin.def_hw_params.rx_bitwidth]);
+	dev_dbg(plat_data->dev, "%s: rx_slotlen %s", __func__, RX_SLOTS[(int32_t)s_rbin.def_hw_params.rx_slotlen]);
+	dev_dbg(plat_data->dev, "%s: tx_slotlen %s", __func__, TX_SLOTS[(int32_t)s_rbin.def_hw_params.tx_slotlen]);
 
-	if (s_rbin.head.version < SUPPORTED_BIN_VERSION) {
-		dev_err(plat_data->dev, "%s: Bin file version not compatible. Supported version=0x%x",
-				__func__, SUPPORTED_BIN_VERSION);
+	if (s_rbin.head.version > SUPPORTED_BIN_VERSION) {
+		dev_err(plat_data->dev,
+			"%s: version not compatible. Supported version <= 0x%x", __func__,
+			SUPPORTED_BIN_VERSION);
 		goto EXIT;
 	}
 
@@ -1851,45 +1966,73 @@ static void tas25xx_binfile_ready(const struct firmware *pFW, void *pContext)
 		dev_info(plat_data->dev,
 			"%s: Error while parsing the algo data, ignored..", __func__);
 
-	dev_info(plat_data->dev, "%s: Firmware init complete\n", __func__);
+	dev_dbg(plat_data->dev, "%s: Firmware init complete\n", __func__);
 
 	atomic_set(&p_tas25xx->fw_state, TAS25XX_DSP_FW_OK);
-	release_firmware(pFW);
-
-	atomic_set(&p_tas25xx->fw_wait_complete, 1);
-	wake_up(&p_tas25xx->fw_wait);
-
-	return;
 
 EXIT:
-	atomic_set(&p_tas25xx->fw_state, TAS25XX_DSP_FW_FAIL);
 	atomic_set(&p_tas25xx->fw_wait_complete, 1);
 	wake_up(&p_tas25xx->fw_wait);
 
 	if (pFW)
 		release_firmware(pFW);
-	dev_info(plat_data->dev, "%s: Firmware init error\n", __func__);
 }
 
 
-int32_t tas25xx_load_binfile(struct tas25xx_priv *p_tas25xx)
+int32_t tas25xx_load_firmware(struct tas25xx_priv *p_tas25xx, int max_fw_tryload_count)
 {
 	int32_t ret;
+	uint32_t retry_count = 0;
 	struct linux_platform *plat_data = NULL;
 
 	g_tas25xx = p_tas25xx;
 
 	plat_data = (struct linux_platform *) p_tas25xx->platform_data;
-	atomic_set(&p_tas25xx->fw_state, TAS25XX_DSP_FW_PENDING);
-	ret = request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT,
-			TAS25XX_BINFILE_NAME, plat_data->dev, GFP_KERNEL,
-			p_tas25xx, tas25xx_binfile_ready);
-	if (ret) {
-		dev_err(plat_data->dev, "request_firmware_nowait failed, err=%d", ret);
-		atomic_set(&p_tas25xx->fw_state, TAS25XX_DSP_FW_FAIL);
-		atomic_set(&p_tas25xx->fw_wait_complete, 1);
-	} else {
-		dev_info(plat_data->dev, "bin file load requested");
+
+	if (!max_fw_tryload_count)
+		max_fw_tryload_count = DSP_FW_LOAD_NTRIES;
+	atomic_set(&p_tas25xx->fw_wait_complete, 0);
+
+	do {
+		ret = request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT,
+				TAS25XX_BINFILE_NAME, plat_data->dev, GFP_KERNEL,
+				p_tas25xx, tas25xx_fw_ready);
+		if (ret) {
+			dev_err(plat_data->dev, "request_firmware_nowait failed, err=%d", ret);
+			msleep(100);
+		} else {
+			dev_info(plat_data->dev, "fw load requested, trail=%d", retry_count);
+			/* wait for either firmware to be loaded or failed */
+			ret = wait_event_interruptible(p_tas25xx->fw_wait,
+				atomic_read(&p_tas25xx->fw_wait_complete));
+			if (ret)
+				dev_err(plat_data->dev, "wait failed with error %d", ret);
+
+			/* any other state other than retry */
+			if (atomic_read(&p_tas25xx->fw_state) != TAS25XX_DSP_FW_TRYLOAD)
+				break;
+
+			atomic_set(&p_tas25xx->fw_wait_complete, 0);
+			msleep(100);
+		}
+
+		retry_count++;
+	} while (retry_count < max_fw_tryload_count);
+
+	if (retry_count == max_fw_tryload_count)
+		atomic_set(&p_tas25xx->fw_state, TAS25XX_DSP_FW_LOAD_FAIL);
+
+	switch (atomic_read(&p_tas25xx->fw_state)) {
+	case TAS25XX_DSP_FW_LOAD_FAIL:
+		ret = -ENOENT;
+		break;
+	case TAS25XX_DSP_FW_OK:
+		ret = 0;
+		break;
+	case TAS25XX_DSP_FW_PARSE_FAIL:
+	default:
+		ret = -EINVAL;
+		break;
 	}
 
 	return ret;
@@ -1916,7 +2059,7 @@ int32_t tas25xx_create_kcontrols(struct tas25xx_priv *p_tas25xx)
 			goto EXIT;
 		}
 	} else {
-		dev_err(plat_data->dev, "%s: firmware no loaded\n", __func__);
+		dev_err(plat_data->dev, "%s: firmware not loaded\n", __func__);
 	}
 EXIT:
 	return ret;
