@@ -3134,7 +3134,11 @@ static int cs40l26_input_init(struct cs40l26_private *cs40l26)
 		return error;
 	}
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	error = sysfs_create_groups(&cs40l26->dev->kobj, cs40l26_attr_groups);
+#else
 	error = sysfs_create_groups(&cs40l26->input->dev.kobj, cs40l26_attr_groups);
+#endif
 	if (error) {
 		dev_err(dev, "Failed to create sysfs groups\n");
 		return error;
@@ -5145,7 +5149,11 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 	gpiod_set_value_cansleep(cs40l26->reset_gpio, 1);
 
 	if (cs40l26->vibe_init_success)
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+		sysfs_remove_groups(&cs40l26->dev->kobj, cs40l26_attr_groups);
+#else
 		sysfs_remove_groups(&cs40l26->input->dev.kobj, cs40l26_attr_groups);
+#endif
 
 #ifdef CONFIG_DEBUG_FS
 	cs40l26_debugfs_cleanup(cs40l26);
