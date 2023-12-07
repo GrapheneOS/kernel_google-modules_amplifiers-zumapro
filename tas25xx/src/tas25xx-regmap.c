@@ -614,19 +614,21 @@ static void irq_work_routine(struct work_struct *work)
 
 static void init_work_routine(struct work_struct *work)
 {
-	int ret;
+	int ret, chn;
 	struct tas_device *dev_tas25xx =
 		container_of(work, struct tas_device, init_work.work);
 	struct tas25xx_priv *p_tas25xx = dev_tas25xx->prv_data;
 	struct linux_platform *plat_data = NULL;
 
 	plat_data = (struct linux_platform *) p_tas25xx->platform_data;
+	chn = dev_tas25xx->channel_no;
 
 	mutex_lock(&p_tas25xx->codec_lock);
 
 	if (p_tas25xx->m_power_state == TAS_POWER_ACTIVE) {
 		tas25xx_init_work_func(p_tas25xx, dev_tas25xx);
-		ret = tas25xx_update_kcontrol_data(p_tas25xx, KCNTR_POST_POWERUP);
+		ret = tas25xx_update_kcontrol_data(p_tas25xx,
+			KCNTR_POST_POWERUP, 1 << chn);
 		if (ret)
 			dev_err(plat_data->dev,
 				"%s error during post powerup kcontrol update", __func__);

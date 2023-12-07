@@ -25,7 +25,7 @@
 #include <sound/soc.h>
 #include <linux/version.h>
 
-#define TAS25XX_DRIVER_TAG  "UDA_0.0.19_3_K6.1"
+#define TAS25XX_DRIVER_TAG  "UDA_0.0.20_K6.1"
 
 #define MAX_CHANNELS	2
 
@@ -125,6 +125,9 @@ struct snd_soc_component;
 #define CMD_DELAY_SZ		5
 
 #define DSP_FW_LOAD_NTRIES  20
+
+#define INTERRUPT_TYPE_CLOCK_BASED (1<<0)
+#define INTERRUPT_TYPE_NON_CLOCK_BASED (1<<1)
 
 enum tas_power_states_t {
 	TAS_POWER_ACTIVE = 0,

@@ -1209,7 +1209,7 @@ static int32_t tas25xx_int_put_idx_value(struct tas25xx_priv *p_tas25xx,
 				if (ret) {
 					dev_err(plat_data->dev, "tas25xx:%s failed ret = %d\n", __func__, ret);
 				} else {
-					dev_dbg(plat_data->dev,
+					dev_info(plat_data->dev,
 						"ch=%d Cmd = %s B:P:R %02x:%02x:%02x, value=%02x, ret=%d\n", chn,
 						CMD_ID[CMD_SINGLE_WRITE], TAS25XX_BOOK_ID(reg_w), TAS25XX_PAGE_ID(reg_w),
 						TAS25XX_PAGE_REG(reg_w), value_w, ret);
@@ -1225,7 +1225,7 @@ static int32_t tas25xx_int_put_idx_value(struct tas25xx_priv *p_tas25xx,
 				if (ret) {
 					dev_err(plat_data->dev, "tas25xx:%s failed ret = %d\n", __func__, ret);
 				} else {
-					dev_dbg(plat_data->dev, "ch=%d Cmd = %s B:P:R %02x:%02x:%02x, value=%02x, ret=%d\n",
+					dev_info(plat_data->dev, "ch=%d Cmd = %s B:P:R %02x:%02x:%02x, value=%02x, ret=%d\n",
 						chn, CMD_ID[CMD_BURST_WRITES], TAS25XX_BOOK_ID(reg_w), TAS25XX_PAGE_ID(reg_w),
 						TAS25XX_PAGE_REG(reg_w), value_w, ret);
 				}
@@ -1238,7 +1238,7 @@ static int32_t tas25xx_int_put_idx_value(struct tas25xx_priv *p_tas25xx,
 				if (ret) {
 					dev_err(plat_data->dev, "tas25xx:%s failed ret = %d\n", __func__, ret);
 				} else {
-					dev_dbg(plat_data->dev,
+					dev_info(plat_data->dev,
 						"ch=%d Cmd = %s B:P:R %02x:%02x:%02x, mask=%02x, value=%02x, ret=%d\n",
 						chn, CMD_ID[CMD_UPDATE_BITS], TAS25XX_BOOK_ID(reg_w), TAS25XX_PAGE_ID(reg_w),
 						TAS25XX_PAGE_REG(reg_w), mask_w, value_w, ret);
@@ -1288,7 +1288,6 @@ static int32_t tas25xx_put(struct snd_kcontrol *kcontrol,
 	if (curr_kcontrol < g_no_of_kcontrols) {
 		int32_t value_idx = ucontrol->value.integer.value[0];
 		misc_info = g_kctrl_data[curr_kcontrol].kcontrol.int_type.misc_info;
-
 		if (((misc_info & 0xf) == KCNTR_ANYTIME) ||
 						(p_tas25xx->m_power_state == TAS_POWER_ACTIVE))
 			ret = tas25xx_int_put_idx_value(p_tas25xx, curr_kcontrol, value_idx);
@@ -1414,10 +1413,11 @@ static int32_t tas25xx_enum_put(struct snd_kcontrol *kcontrol,
  * when something like SW/HW reset happens.
  */
 int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx,
-	enum kcntl_during_t cur_state)
+	enum kcntl_during_t cur_state, uint32_t chmask)
 {
 	int ret = -EINVAL;
 	int i = 0, kcntrl_type, misc_info;
+	int chn;
 	char *name = NULL;
 	struct linux_platform *plat_data = NULL;
 	struct tas25xx_kcontrol_int *int_type;
@@ -1434,8 +1434,6 @@ int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx,
 	if (!plat_data)
 		return ret;
 
-	dev_info(plat_data->dev, "%s updating the kcontrol data", __func__);
-
 	for (i = 0; i < g_no_of_kcontrols; ++i) {
 		kcntrl_type = g_kctrl_data[i].type;
 		ret = 0;
@@ -1444,21 +1442,27 @@ int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx,
 		/* integer */
 		case 0:
 			int_type = &g_kctrl_data[i].kcontrol.int_type;
-			misc_info = int_type->misc_info;
-			name = int_type->name;
-			if (cur_state == (misc_info & 0xf))
-				ret = tas25xx_int_put_idx_value(p_tas25xx, i,
-					int_type->curr_val);
+			chn = g_kctrl_data[i].kcontrol.int_type.channel;
+			if ((1 << chn) & chmask) {
+				misc_info = int_type->misc_info;
+				name = int_type->name;
+				if (cur_state == (misc_info & 0xf))
+					ret = tas25xx_int_put_idx_value(p_tas25xx, i,
+						int_type->curr_val);
+			}
 			break;
 
 		/* enum */
 		case 1:
 			enum_type = &g_kctrl_data[i].kcontrol.enum_type;
-			misc_info = enum_type->misc_info;
-			name = enum_type->name;
-			if (cur_state == (misc_info & 0xf))
-				ret = tas25xx_enum_put_idx_value(p_tas25xx, i,
-					enum_type->curr_val);
+			chn = g_kctrl_data[i].kcontrol.enum_type.channel;
+			if ((1 << chn) & chmask) {
+				misc_info = enum_type->misc_info;
+				name = enum_type->name;
+				if (cur_state == (misc_info & 0xf))
+					ret = tas25xx_enum_put_idx_value(p_tas25xx, i,
+						enum_type->curr_val);
+			}
 			break;
 
 		default:

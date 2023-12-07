@@ -129,7 +129,7 @@ int tas_dev_interrupt_disable(struct tas25xx_priv *p_tas25xx, int chn)
 	return 0;
 }
 
-int tas_dev_interrupt_read(struct tas25xx_priv *p_tas25xx, int chn)
+int tas_dev_interrupt_read(struct tas25xx_priv *p_tas25xx, int chn, int *type)
 {
 	int32_t ret = 0;
 	int32_t i;
@@ -148,6 +148,7 @@ int tas_dev_interrupt_read(struct tas25xx_priv *p_tas25xx, int chn)
 	for (i = 0; i < intr_data->count; i++) {
 		intr_info = &intr_data->intr_info[i];
 		if (!powered_up && intr_info->is_clock_based) {
+			/* ignore clock based interrupt during power off state */
 			dev_dbg(plat_data->dev,
 				"INTR: not checking for %s, reason: not active state",
 				intr_info->name);
@@ -170,6 +171,10 @@ int tas_dev_interrupt_read(struct tas25xx_priv *p_tas25xx, int chn)
 				"INTR: Error reading the interrupt reg=%d, err=%d", reg, ret);
 		} else {
 			if (value & intr_info->mask) {
+				if (powered_up && intr_info->is_clock_based)
+					*type |= INTERRUPT_TYPE_CLOCK_BASED;
+				else
+					*type |= INTERRUPT_TYPE_NON_CLOCK_BASED;
 				dev_info(plat_data->dev, "INTR: Detected, ch=%d, intr=%s",
 					chn, intr_info->name);
 				intr_info->detected = 1;

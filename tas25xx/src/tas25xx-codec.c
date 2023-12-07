@@ -503,8 +503,7 @@ static int tas25xx_setup_irq(struct tas25xx_priv *p_tas25xx)
 			if (ret) {
 				dev_err(plat_data->dev, "request_irq failed, error=%d\n", ret);
 			} else {
-				p_tas25xx->irq_enabled[i] = 0;
-				disable_irq_nosync(p_tas25xx->devs[i]->irq_no);
+				p_tas25xx->irq_enabled[i] = 1;
 				dev_info(plat_data->dev, "Interrupt registration successful!!!");
 			}
 		}

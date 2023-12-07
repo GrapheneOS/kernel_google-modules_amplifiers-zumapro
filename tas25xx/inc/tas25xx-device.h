@@ -17,6 +17,6 @@ int tas25xx_rx_set_bitwidth(struct tas25xx_priv *p_tas25xx,
 int tas_dev_interrupt_clear(struct tas25xx_priv *p_tas25xx, int ch);
 int tas_dev_interrupt_enable(struct tas25xx_priv *p_tas25xx, int ch);
 int tas_dev_interrupt_disable(struct tas25xx_priv *p_tas25xx, int ch);
-int tas_dev_interrupt_read(struct tas25xx_priv *p_tas25xx, int ch);
+int tas_dev_interrupt_read(struct tas25xx_priv *p_tas25xx, int ch, int *type);
 
 #endif /* __TAS25XX_DEVICE_ */

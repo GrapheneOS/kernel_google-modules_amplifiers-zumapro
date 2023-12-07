@@ -113,7 +113,8 @@ int32_t tas25xx_process_block(struct tas25xx_priv *p_tas25xx, char *mem, int32_t
 int32_t tas25xx_check_if_powered_on(struct tas25xx_priv *p_tas25xx, int *state, int ch);
 int tas_write_init_config_params(struct tas25xx_priv *p_tas25xx, int number_of_channels);
 
-int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx, enum kcntl_during_t cur_state);
+int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx, enum kcntl_during_t cur_state,
+	uint32_t chmask);
 
 void tas25xx_prep_dev_for_calib(int start);
 #endif /* __TAS25XX_REGBIN_PARSER__ */

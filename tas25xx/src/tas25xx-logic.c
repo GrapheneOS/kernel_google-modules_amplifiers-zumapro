@@ -377,7 +377,7 @@ static int tas25xx_reinit(struct tas25xx_priv *p_tas25xx)
 	if (ret)
 		goto reinit_done;
 
-	ret = tas25xx_update_kcontrol_data(p_tas25xx, KCNTR_ANYTIME);
+	ret = tas25xx_update_kcontrol_data(p_tas25xx, KCNTR_ANYTIME, 0xFFFF);
 	if (ret)
 		goto reinit_done;
 
@@ -441,6 +441,7 @@ int tas25xx_irq_work_func(struct tas25xx_priv *p_tas25xx)
 	int8_t othr_intr;
 	int32_t i, j;
 	int32_t ret = 0;
+	int32_t type = 0;
 	int32_t irq_lim_crossed;
 	int32_t interrupt_count;
 	int32_t state;
@@ -456,7 +457,7 @@ int tas25xx_irq_work_func(struct tas25xx_priv *p_tas25xx)
 
 	p_tas25xx->disable_irq(p_tas25xx);
 	for (i = 0; i < p_tas25xx->ch_count; i++) {
-		ret = tas_dev_interrupt_read(p_tas25xx, i);
+		ret = tas_dev_interrupt_read(p_tas25xx, i, &type);
 		if (ret)
 			intr_detected |= (1 << i);
 	}
@@ -562,14 +563,7 @@ int tas25xx_irq_work_func(struct tas25xx_priv *p_tas25xx)
 		/* order should be followed */
 		if (int_actions & TAS_INT_ACTION_HW_RESET) {
 			dev_info(plat_data->dev, "ch=%d Interrupt action hard reset", i);
-#if 0
 			tas25xx_hard_reset(p_tas25xx);
-#else
-			ret = tas25xx_software_reset(p_tas25xx, i);
-			if (ret)
-				dev_err(plat_data->dev,
-					"ch=%d Software reset failed with error=%d", i, ret);
-#endif
 			reset_done = 1;
 		}
 
@@ -588,10 +582,7 @@ int tas25xx_irq_work_func(struct tas25xx_priv *p_tas25xx)
 		if (int_actions & TAS_INT_ACTION_POWER_ON) {
 			tas25xx_check_if_powered_on(p_tas25xx, &state, i);
 			if (state == 0) {
-				ret = tas_dev_interrupt_enable(p_tas25xx, i);
-				if (ret)
-					dev_err(plat_data->dev,
-						"ch=%d error enabling interrupt", i);
+				/* interrupts are enabled during power up sequence */
 				dev_info(plat_data->dev,
 					"ch=%d Try powering on the device", i);
 				ret = tas25xx_set_power_state(p_tas25xx,
@@ -611,6 +602,8 @@ int tas25xx_init_work_func(struct tas25xx_priv *p_tas25xx, struct tas_device *de
 {
 	int chn = 0;
 	int ret = 0;
+	int detected = 0;
+	int type = 0;
 	struct linux_platform *plat_data =
 		(struct linux_platform *) p_tas25xx->platform_data;
 
@@ -623,11 +616,23 @@ int tas25xx_init_work_func(struct tas25xx_priv *p_tas25xx, struct tas_device *de
 			"ch=%d Error in  post powerup data write.  err=%d\n",
 			chn, ret);
 
-	ret = tas_dev_interrupt_clear(p_tas25xx, chn);
-	if (ret)
-		dev_err(plat_data->dev,
-			"ch=%d Error while clearing interrup err=%d\n",
-			chn, ret);
+	/* check for interrupts during power up */
+	detected = tas_dev_interrupt_read(p_tas25xx, chn, &type);
+	if (detected) {
+		if (type == INTERRUPT_TYPE_CLOCK_BASED) {
+			/* ignore clock based interrupts which we are monitoring */
+			dev_info(plat_data->dev,
+				"Ignoring clock based interrupts and clear latch");
+			ret = tas_dev_interrupt_clear(p_tas25xx, chn);
+			if (ret)
+				dev_err(plat_data->dev,
+					"ch=%d Error while clearing interrup err=%d\n",
+					chn, ret);
+		} else {
+			dev_info(plat_data->dev,
+				"Non clock based interrupts detected, skip latch clear for recovery");
+		}
+	}
 
 	/* enabling the interrupt here to avoid any clock errors during the bootup*/
 	ret = tas_dev_interrupt_enable(p_tas25xx, chn);
@@ -1120,6 +1125,9 @@ int tas25xx_set_power_state(struct tas25xx_priv *p_tas25xx,
 	cur_state = p_tas25xx->m_power_state;
 	p_tas25xx->m_power_state = state;
 
+	/* supports max 4 channels */
+	ch_bitmask &= tas25xx_get_drv_channel_opmode() & 0xF;
+
 	switch (state) {
 	case TAS_POWER_ACTIVE:
 		for (i = 0; i < p_tas25xx->ch_count; i++) {
@@ -1127,12 +1135,18 @@ int tas25xx_set_power_state(struct tas25xx_priv *p_tas25xx,
 				continue;
 
 			if (cur_state != state) {
+				dev_dbg(plat_data->dev,
+					"ch=%d %s: clearing interrupts \n", i, __func__);
+
 				ret = tas_dev_interrupt_clear(p_tas25xx, i);
 				if (ret) {
 					dev_err(plat_data->dev,
 						"ch=%d %s: Error clearing interrupt\n", i, __func__);
 					ret = 0;
 				}
+			} else {
+				dev_dbg(plat_data->dev,
+					"ch=%d %s: skipping clearing interrupts \n", i, __func__);
 			}
 
 			ret = tas25xx_set_pre_powerup(p_tas25xx, i);
@@ -1140,7 +1154,7 @@ int tas25xx_set_power_state(struct tas25xx_priv *p_tas25xx,
 				dev_err(plat_data->dev, "ch=%d %s setting power state failed, err=%d\n",
 					i, __func__, ret);
 			} else {
-				ret = tas25xx_update_kcontrol_data(p_tas25xx, KCNTR_PRE_POWERUP);
+				ret = tas25xx_update_kcontrol_data(p_tas25xx, KCNTR_PRE_POWERUP, (1 << i));
 				p_tas25xx->schedule_init_work(p_tas25xx, i);
 			}
 		}
