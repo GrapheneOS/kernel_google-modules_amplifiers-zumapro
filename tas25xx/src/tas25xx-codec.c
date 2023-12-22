@@ -73,8 +73,9 @@ static unsigned int tas25xx_codec_read(struct snd_soc_component *codec,
 	switch (reg) {
 	case TAS25XX_SWITCH:
 		dev_dbg(plat_data->dev, "%s: %x, %d TAS25XX_SWITCH",
-			__func__, reg, value);
+			__func__, reg, p_tas25xx->device_used);
 		value = p_tas25xx->device_used;
+		ret = 0;
 		break;
 
 	default:
