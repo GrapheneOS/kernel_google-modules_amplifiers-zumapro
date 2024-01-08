@@ -662,11 +662,7 @@ static irqreturn_t cs40l26_handle_mbox_buffer(int irq, void *data)
 
 	while (!cs40l26_mbox_buffer_read(cs40l26, &val)) {
 		if ((val & CS40L26_DSP_MBOX_CMD_INDEX_MASK) == CS40L26_DSP_MBOX_PANIC) {
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-			dev_err(dev, "DSP PANIC! Error condition: 0x%06X\n",
-#else
 			dev_alert(dev, "DSP PANIC! Error condition: 0x%06X\n",
-#endif
 			(u32) (val & CS40L26_DSP_MBOX_CMD_PAYLOAD_MASK));
 			irq_status = IRQ_HANDLED;
 			goto err_mutex;
@@ -3760,11 +3756,7 @@ static int cs40l26_lbst_short_test(struct cs40l26_private *cs40l26)
 	}
 
 	if (err & BIT(CS40L26_BST_SHORT_ERR_RLS)) {
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-		dev_err(dev, "FATAL: Boost shorted at startup\n");
-#else
 		dev_alert(dev, "FATAL: Boost shorted at startup\n");
-#endif
 		return -ENOTRECOVERABLE;
 	}
 
@@ -5224,11 +5216,7 @@ EXPORT_SYMBOL_GPL(cs40l26_sys_suspend_noirq);
 
 void cs40l26_resume_error_handle(struct device *dev, int error)
 {
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-	dev_err(dev, "PM Runtime Resume failed: %d\n", error);
-#else
 	dev_alert(dev, "PM Runtime Resume failed: %d\n", error);
-#endif
 
 	pm_runtime_set_active(dev);
 
