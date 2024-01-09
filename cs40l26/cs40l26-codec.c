@@ -136,7 +136,11 @@ static int cs40l26_dsp_tx(struct snd_soc_dapm_widget *w, struct snd_kcontrol *kc
 	int error;
 	u32 reg;
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
+	dev_info(dev, "%s: %s\n", __func__, event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#else
 	dev_dbg(dev, "%s: %s\n", __func__, event == SND_SOC_DAPM_POST_PMU ? "PMU" : "PMD");
+#endif
 
 	if (codec->dsp_bypass) {
 		dev_err(dev, "Cannot use A2H while bypassing DSP\n");
