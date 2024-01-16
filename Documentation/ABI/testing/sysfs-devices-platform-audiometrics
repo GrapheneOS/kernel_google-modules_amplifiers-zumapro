@@ -12,6 +12,13 @@ Contact:	poomarin <poomarin@google.com>
 Description:
 		Reading from this file provides CCA count and resets count value.
 
+What: /sys/devices/platform/audiometrics/call_count
+Date: Jul, 2023
+KernelVersion:	5.15
+Contact:	poomarin <poomarin@google.com>
+Description:
+		Reading from this file provides total count of voice-call and VoIP-call
+
 What:		/sys/devices/platform/audiometrics/pdm_state
 Date:		Mar, 2023
 KernelVersion:	5.15
@@ -101,13 +108,6 @@ KernelVersion:	5.15
 Contact:	poomarin <poomarin@google.com>
 Description:
 		Reading from this file provides a total duration of the dsp record events.
-
-What: /sys/devices/platform/audiometrics/call_count
-Date: Jul, 2023
-KernelVersion:	5.15
-Contact:	poomarin <poomarin@google.com>
-Description:
-		Reading from this file provides total count of voice-call and VoIP-call
 
 What:		/sys/devices/platform/audiometrics/audio_software_restart_count,
 Date:		Jul, 2023

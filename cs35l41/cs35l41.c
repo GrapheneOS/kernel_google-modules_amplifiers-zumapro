@@ -988,6 +988,30 @@ static bool cs35l41_check_cspl_mbox_sts(enum cs35l41_cspl_mbox_cmd cmd,
 	}
 }
 
+static void cs35l41_dump_debug_info(struct cs35l41_private *cs35l41)
+{
+	/* Vendor suggest to dump those registers for debugging
+	   from b/237030499#comment12 */
+	static const unsigned int dump_regs[] = {
+		CS35L41_PLL_CLK_CTRL,		/* 0x2c04 */
+		CS35L41_DSP_CLK_CTRL,		/* 0x2c08 */
+		CS35L41_SP_RATE_CTRL,		/* 0x4804 */
+		CS35L41_SP_FORMAT,		/* 0x4808 */
+		CS35L41_SP_RX_WL,		/* 0x4840 */
+		CS35L41_IRQ1_RAW_STATUS1,	/* 0x10090 */
+		CS35L41_IRQ1_RAW_STATUS2,	/* 0x10094 */
+		CS35L41_IRQ1_RAW_STATUS3,	/* 0x10098 */
+		CS35L41_IRQ1_RAW_STATUS4,	/* 0x1009c */
+	};
+	unsigned int reg_value;
+	int i;
+
+	for (i = 0;i < ARRAY_SIZE(dump_regs); i++) {
+		regmap_read(cs35l41->regmap, dump_regs[i], &reg_value);
+		dev_warn(cs35l41->dev, "Reg(%#x)=%#x\n", dump_regs[i], reg_value);
+	}
+}
+
 static int cs35l41_set_cspl_mbox_cmd(struct cs35l41_private *cs35l41,
 				   enum cs35l41_cspl_mbox_cmd cmd)
 {
@@ -1025,6 +1049,7 @@ static int cs35l41_set_cspl_mbox_cmd(struct cs35l41_private *cs35l41,
 			"Failed to set mailbox cmd %u (status %u)\n",
 			cmd, sts);
 		ret = -ENOMSG;
+		cs35l41_dump_debug_info(cs35l41);
 	}
 
 	return ret;

@@ -2,15 +2,26 @@
 
 load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
 
+filegroup(
+    name = "headers",
+    srcs = [
+        "wm_adsp.h",
+        "wmfw.h",
+    ],
+    visibility = [
+        "//private/google-modules/amplifiers:__subpackages__",
+    ],
+)
+
 kernel_module(
-    name = "cs40l25",
+    name = "snd-soc-wm-adsp",
     outs = [
-        "haptics-cs40l2x.ko",
-        "snd_soc_cs40l2x.ko",
+        "snd-soc-wm-adsp.ko",
     ],
     kernel_build = "//private/google-modules/soc/gs:gs_kernel_build",
     visibility = [
         "//private/devices/google:__subpackages__",
+        "//private/google-modules/amplifiers:__subpackages__",
         "//private/google-modules/soc/gs:__pkg__",
     ],
 )
