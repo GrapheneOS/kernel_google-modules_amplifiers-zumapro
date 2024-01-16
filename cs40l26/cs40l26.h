@@ -43,15 +43,9 @@
 #include <sound/soc.h>
 #include <sound/initval.h>
 #include <sound/tlv.h>
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 #include <trace/hooks/systrace.h>
-#endif
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 #include "cl_dsp.h"
-#else
-#include <linux/firmware/cirrus/cl_dsp.h>
-#endif
 
 #define CS40L26_LASTREG					0x3C7DFE8
 
@@ -140,14 +134,11 @@
 #define CS40L26_SPK_DEFAULT_HIZ_SHIFT				28
 
 /* Device */
-#ifdef CONFIG_GOOG_CUST
 #define CS40L26_MAX_DEVICES		2
 #define CS40L26_MAX_PROBE_RETRY		2
-#endif
 #define CS40L26_DEV_NAME		"CS40L26"
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 #define CS40L26_INPUT_DEV_NAME		"cs40l26_input"
-#endif
+
 #define CS40L26_DEVID_A			0x40A260
 #define CS40L26_DEVID_B			0x40A26B
 #define CS40L26_DEVID_L27_A		0x40A270
@@ -161,16 +152,12 @@
 #define CS40L26_REVID_B2		0xB2
 #define CS40L26_REVID_MASK		GENMASK(7, 0)
 
-#define CS40L26_ID_L26A_A1      ((CS40L26_DEVID_A << 8) | CS40L26_REVID_A1)
-#define CS40L26_ID_L26B_A1      ((CS40L26_DEVID_B << 8) | CS40L26_REVID_A1)
-#define CS40L26_ID_L27A_A1      ((CS40L26_DEVID_L27_A << 8) | CS40L26_REVID_A1)
-#define CS40L26_ID_L27B_A1      ((CS40L26_DEVID_L27_B << 8) | CS40L26_REVID_A1)
-#define CS40L26_ID_L26A_B0      ((CS40L26_DEVID_A << 8) | CS40L26_REVID_B0)
-#define CS40L26_ID_L26B_B0      ((CS40L26_DEVID_B << 8) | CS40L26_REVID_B0)
-#define CS40L26_ID_L27A_B0      ((CS40L26_DEVID_L27_A << 8) | CS40L26_REVID_B0)
-#define CS40L26_ID_L27B_B0      ((CS40L26_DEVID_L27_B << 8) | CS40L26_REVID_B0)
+#define CS40L26_ID_L26A_A1	((CS40L26_DEVID_A << 8) | CS40L26_REVID_A1)
+#define CS40L26_ID_L27A_A1	((CS40L26_DEVID_L27_A << 8) | CS40L26_REVID_A1)
+#define CS40L26_ID_L26A_B0	((CS40L26_DEVID_A << 8) | CS40L26_REVID_B0)
+#define CS40L26_ID_L27A_B0	((CS40L26_DEVID_L27_A << 8) | CS40L26_REVID_B0)
 #define CS40L26_ID_L27A_B1	((CS40L26_DEVID_L27_A << 8) | CS40L26_REVID_B1)
-#define CS40L26_ID_L27A_B2      ((CS40L26_DEVID_L27_A << 8) | CS40L26_REVID_B2)
+#define CS40L26_ID_L27A_B2	((CS40L26_DEVID_L27_A << 8) | CS40L26_REVID_B2)
 
 #define CS40L26_GLOBAL_EN_MASK		BIT(0)
 
@@ -228,11 +215,12 @@
 
 /* DebugFS */
 #define CS40L26_ALGO_ID_MAX_STR_LEN	12
-#define CS40L26_NUM_DEBUGFS		3
+#define CS40L26_HW_STR_LEN		16
 
 /* Power management */
 #define CS40L26_PSEQ_MAX_WORDS			129
 #define CS40L26_PSEQ_NUM_OPS			8
+#define CS40L26_PSEQ_STR_LINE_LEN		64
 #define CS40L26_PSEQ_OP_MASK			GENMASK(23, 16)
 #define CS40L26_PSEQ_OP_SHIFT			16
 #define CS40L26_PSEQ_OP_WRITE_FULL		0x00
@@ -272,6 +260,18 @@
 #define CS40L26_PSEQ_WRITE_ADDR8_UPPER_DATA_MASK	GENMASK(31, 24)
 #define CS40L26_PSEQ_WRITE_ADDR8_LOWER_DATA_MASK	GENMASK(23, 0)
 
+#define CS40L26_PSEQ_FULL_ADDR_GET(x, y)	((((x) & 0xFFFF) << 16) |\
+						(((y) & 0xFFFF00) >> 8))
+#define CS40L26_PSEQ_FULL_DATA_GET(x, y)	((((x) & 0xFF) << 24) |\
+						((y) & 0xFFFFFF))
+#define CS40L26_PSEQ_X16_ADDR_GET(x, y)		((((x) & 0xFFFF) << 8) |\
+						(((y) & 0xFF0000) >> 16))
+#define CS40L26_PSEQ_L16_DATA_GET(x)		((x) & 0xFFFF)
+#define CS40L26_PSEQ_H16_DATA_GET(x)		(CS40L26_PSEQ_L16_DATA_GET((x)) << 16)
+#define CS40L26_PSEQ_ADDR8_ADDR_GET(x)		(((x) & 0xFF00) >> 8)
+#define CS40L26_PSEQ_ADDR8_DATA_GET(x, y)	((((x) & 0xFF) << 24) |\
+						((y) & 0xFFFFFF))
+
 #define CS40L26_PM_STDBY_TIMEOUT_OFFSET		16
 #define CS40L26_PM_STDBY_TIMEOUT_MS_MIN		100
 #define CS40L26_PM_TIMEOUT_MS_MAX		10000
@@ -281,7 +281,7 @@
 #define CS40L26_PM_TIMEOUT_TICKS_LOWER_MASK	GENMASK(23, 0)
 #define CS40L26_PM_TIMEOUT_TICKS_UPPER_MASK	GENMASK(7, 0)
 #define CS40L26_PM_TIMEOUT_TICKS_UPPER_SHIFT	24
-#define CS40L26_PM_TICKS_PER_MS			32
+#define CS40L26_PM_TICKS_PER_SEC		32768
 
 #define CS40L26_AUTOSUSPEND_DELAY_MS		2000
 
@@ -314,11 +314,7 @@
 /* DSP mailbox controls */
 #define CS40L26_DSP_TIMEOUT_US_MIN		1000
 #define CS40L26_DSP_TIMEOUT_US_MAX		1100
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 #define CS40L26_DSP_TIMEOUT_COUNT		3
-#else
-#define CS40L26_DSP_TIMEOUT_COUNT		100
-#endif
 
 #define CS40L26_DSP_MBOX_CMD_HIBER		0x02000001
 #define CS40L26_DSP_MBOX_CMD_WAKEUP		0x02000002
@@ -411,14 +407,16 @@
 #define CS40L26_FW_MAINT_BRANCH			0x27
 #define CS40L26_FW_MAINT_CALIB_MIN_REV		0x21010D
 #define CS40L26_FW_MAINT_CALIB_BRANCH		0x21
-#define CS40L26_FW_B2_MIN_REV			0x080100
-#define CS40L26_FW_B2_BRANCH			0x08
+#define CS40L26_FW_B2_MIN_REV			0x090000
+#define CS40L26_FW_B2_BRANCH			0x09
 #define CS40L26_FW_GPI_TIMEOUT_MIN_REV		0x07022A
 #define CS40L26_FW_GPI_TIMEOUT_CALIB_MIN_REV	0x010122
 #define CS40L26_FW_BRANCH_MASK			GENMASK(23, 21)
 
 #define CS40L26_CCM_CORE_RESET		0x00000200
 #define CS40L26_CCM_CORE_ENABLE		0x00000281
+
+#define CS40L26_COEFF_NAME_MAX_LEN	64
 
 /* Wavetable */
 #define CS40L26_WT_NAME_XM	"WAVE_XM_TABLE"
@@ -571,6 +569,7 @@
 #define CS40L26_BST_CTL_LIM_EN_SHIFT		2
 
 #define CS40L26_OVERPROTECTION_GAIN_MIN		BIT(20)
+#define CS40L26_OVERPROTECTION_GAIN_MAX		0x7FFFFF
 
 #define CS40L26_BOOST_DISABLE_DELAY_MAX		8388608
 
@@ -630,9 +629,6 @@
 #define CS40L26_VXBR_REL_RATE_MAX		7
 #define CS40L26_VXBR_REL_RATE_MIN		0
 #define CS40L26_VXBR_REL_RATE_DEFAULT		5
-
-/* Mixer noise gate */
-#define CS40L26_MIXER_NGATE_CH1_CFG_DEFAULT_NEW	0x00010003
 
 /* Audio */
 #define CS40L26_PLL_CLK_CFG_32768		0x00
@@ -725,6 +721,8 @@
 #define CS40L26_A2H_LEVEL_MAX		0x7FFFFF
 #define CS40L26_A2H_LEVEL_MIN		0x000001
 
+#define CS40L26_I2S_ATTENUATION_MAX	0x1FFFFF
+
 #define CS40L26_A2H_DELAY_MAX		0x190
 
 #define CS40L26_VMON_DEC_OUT_DATA_MASK	GENMASK(23, 0)
@@ -804,7 +802,7 @@
 
 #define CS40L26_UINT_24_BITS_MAX		16777215
 
-#define CS40L26_CALIBRATION_TIMEOUT_MS	2000
+#define CS40L26_CALIBRATION_TIMEOUT_MS	5000
 
 /* Compensation */
 #define CS40L26_COMP_EN_REDC_SHIFT  1
@@ -1035,6 +1033,12 @@ struct cs40l26_brwnout {
 	u32 rel_rate;
 };
 
+struct cs40l26_sysfs_fw {
+	u32 algo_id;
+	u32 block_type;
+	char ctrl_name[CS40L26_COEFF_NAME_MAX_LEN];
+};
+
 struct cs40l26_private {
 	struct device *dev;
 	struct regmap *regmap;
@@ -1104,11 +1108,11 @@ struct cs40l26_private {
 	const struct cs40l26_rom_data *rom_data;
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *debugfs_root;
-	char *dbg_fw_ctrl_name;
-	u32 dbg_fw_algo_id;
-	bool dbg_fw_ym;
+	struct dentry *debugfs_hw_node;
+	u32 dbg_hw_reg;
 	struct cl_dsp_debugfs *cl_dsp_db;
 #endif
+	struct cs40l26_sysfs_fw sysfs_fw;
 	struct cs40l26_brwnout vbbr;
 	struct cs40l26_brwnout vpbr;
 	bool bst_dcm_en;
@@ -1137,11 +1141,10 @@ struct cs40l26_private {
 	u32 aux_ng_thld;
 	u32 aux_ng_delay;
 	bool aux_ng_enable;
-#if IS_ENABLED(CONFIG_GOOG_CUST)
+	u32 refclk_input;
 	const char *device_name;
 	bool cs40l26_not_probed;
 	u8 device_id;
-#endif
 };
 
 struct cs40l26_codec {
@@ -1197,11 +1200,10 @@ bool cs40l26_volatile_reg(struct device *dev, unsigned int reg);
 int cs40l26_pseq_write(struct cs40l26_private *cs40l26, u32 addr, u32 data, bool update,
 		u8 op_code);
 int cs40l26_copy_f0_est_to_dvl(struct cs40l26_private *cs40l26);
+int cs40l26_rom_wt_init(struct cs40l26_private *cs40l26);
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 static int cs40l26_probed_retry_count[CS40L26_MAX_DEVICES];
 void cs40l26_add_codec_devices(struct device *dev);
-#endif
 
 /* external tables */
 extern struct regulator_bulk_data cs40l26_supplies[CS40L26_NUM_SUPPLIES];

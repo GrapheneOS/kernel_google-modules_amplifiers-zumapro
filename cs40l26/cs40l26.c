@@ -11,11 +11,7 @@
 // it under the terms of the GNU General Public License version 2 as
 // published by the Free Software Foundation.
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 #include "cs40l26.h"
-#else
-#include <linux/mfd/cs40l26.h>
-#endif
 
 static const struct cs40l26_rom_regs cs40l26_rom_regs_a1_b0_b1 = {
 	.pm_cur_state = 0x02800370,
@@ -279,11 +275,11 @@ int cs40l26_pm_timeout_ms_set(struct cs40l26_private *cs40l26, unsigned int dsp_
 	}
 
 	if (timeout_ms > CS40L26_PM_TIMEOUT_MS_MAX)
-		timeout_ticks = CS40L26_PM_TIMEOUT_MS_MAX * CS40L26_PM_TICKS_PER_MS;
+		timeout_ticks = (CS40L26_PM_TIMEOUT_MS_MAX * CS40L26_PM_TICKS_PER_SEC) / 1000;
 	else if (timeout_ms < min)
-		timeout_ticks = min * CS40L26_PM_TICKS_PER_MS;
+		timeout_ticks = (min * CS40L26_PM_TICKS_PER_SEC) / 1000;
 	else
-		timeout_ticks = timeout_ms * CS40L26_PM_TICKS_PER_MS;
+		timeout_ticks = (timeout_ms * CS40L26_PM_TICKS_PER_SEC) / 1000;
 
 	error = regmap_write(cs40l26->regmap, reg, timeout_ticks);
 	if (error)
@@ -323,7 +319,7 @@ int cs40l26_pm_timeout_ms_get(struct cs40l26_private *cs40l26, unsigned int dsp_
 		return error;
 	}
 
-	*timeout_ms = timeout_ticks / CS40L26_PM_TICKS_PER_MS;
+	*timeout_ms = DIV_ROUND_UP(timeout_ticks * 1000, CS40L26_PM_TICKS_PER_SEC);
 
 	return 0;
 }
@@ -345,11 +341,19 @@ static inline void cs40l26_pm_runtime_teardown(struct cs40l26_private *cs40l26)
 
 static int cs40l26_check_pm_lock(struct cs40l26_private *cs40l26, bool *locked)
 {
-	unsigned int dsp_lock;
+	unsigned int dsp_lock, reg;
 	int error;
 
-	error = regmap_read(cs40l26->regmap, cs40l26->rom_regs->pm_state_locks +
-			CS40L26_DSP_LOCK3_OFFSET, &dsp_lock);
+	if (cs40l26->fw_loaded) {
+		error = cl_dsp_get_reg(cs40l26->dsp, "PM_STATE_LOCKS", CL_DSP_XM_UNPACKED_TYPE,
+				CS40L26_PM_ALGO_ID, &reg);
+		if (error)
+			return error;
+	} else {
+		reg = cs40l26->rom_regs->pm_state_locks;
+	}
+
+	error = regmap_read(cs40l26->regmap, reg + CS40L26_DSP_LOCK3_OFFSET, &dsp_lock);
 	if (error)
 		return error;
 
@@ -394,21 +398,15 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26, enum cs40l26_pm
 
 	switch (state) {
 	case CS40L26_PM_STATE_WAKEUP:
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 		ATRACE_BEGIN("CS40L26_PM_STATE_WAKEUP");
-#endif
 		error = cs40l26_mailbox_write(cs40l26, cmd);
 		if (error)
 			return error;
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 		ATRACE_END();
-#endif
 		break;
 	case CS40L26_PM_STATE_PREVENT_HIBERNATE:
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 		ATRACE_BEGIN("CS40L26_PM_STATE_PREVENT_HIBERNATE");
-#endif
 		for (i = 0; i < CS40L26_DSP_STATE_ATTEMPTS; i++) {
 			error = cs40l26_mailbox_write(cs40l26, cmd);
 			if (error)
@@ -437,9 +435,7 @@ int cs40l26_pm_state_transition(struct cs40l26_private *cs40l26, enum cs40l26_pm
 			return -ETIMEDOUT;
 		}
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 		ATRACE_END();
-#endif
 		if (cs40l26->allow_hibernate_sent) {
 			/*
 			 * send time elapsed since last ALLOW_HIBERNATE mailbox
@@ -682,33 +678,25 @@ static irqreturn_t cs40l26_handle_mbox_buffer(int irq, void *data)
 
 		switch (val) {
 		case CS40L26_DSP_MBOX_COMPLETE_MBOX:
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 			ATRACE_END();
-#endif
 			dev_dbg(dev, "Mailbox: COMPLETE_MBOX\n");
 			complete_all(&cs40l26->erase_cont);
 			cs40l26_vibe_state_update(cs40l26, CS40L26_VIBE_STATE_EVENT_MBOX_COMPLETE);
 			break;
 		case CS40L26_DSP_MBOX_COMPLETE_GPIO:
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 			ATRACE_END();
-#endif
 			dev_dbg(dev, "Mailbox: COMPLETE_GPIO\n");
 			cs40l26_vibe_state_update(cs40l26, CS40L26_VIBE_STATE_EVENT_GPIO_COMPLETE);
 			break;
 		case CS40L26_DSP_MBOX_COMPLETE_I2S:
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 			ATRACE_END();
-#endif
 			dev_dbg(dev, "Mailbox: COMPLETE_I2S\n");
 			/* ASP is interrupted */
 			if (cs40l26->asp_enable)
 				complete(&cs40l26->i2s_cont);
 			break;
 		case CS40L26_DSP_MBOX_TRIGGER_I2S:
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 			ATRACE_BEGIN("TRIGGER_I2S");
-#endif
 			dev_dbg(dev, "Mailbox: TRIGGER_I2S\n");
 			complete(&cs40l26->i2s_cont);
 			break;
@@ -719,27 +707,19 @@ static irqreturn_t cs40l26_handle_mbox_buffer(int irq, void *data)
 				goto err_mutex;
 			}
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 			ATRACE_BEGIN("TRIGGER_CP");
-#endif
 			dev_dbg(dev, "Mailbox: TRIGGER_CP\n");
 			cs40l26_vibe_state_update(cs40l26, CS40L26_VIBE_STATE_EVENT_MBOX_PLAYBACK);
 			break;
 		case CS40L26_DSP_MBOX_TRIGGER_GPIO:
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 			ATRACE_BEGIN("TRIGGER_GPIO");
-#endif
 			dev_dbg(dev, "Mailbox: TRIGGER_GPIO\n");
 			cs40l26_vibe_state_update(cs40l26, CS40L26_VIBE_STATE_EVENT_GPIO_TRIGGER);
 			break;
 		case CS40L26_DSP_MBOX_PM_AWAKE:
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 			ATRACE_BEGIN("AWAKE");
-#endif
 			cs40l26->wksrc_sts |= CS40L26_WKSRC_STS_EN;
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 			ATRACE_END();
-#endif
 			dev_dbg(dev, "Mailbox: AWAKE\n");
 			break;
 		case CS40L26_DSP_MBOX_INIT:
@@ -846,7 +826,7 @@ int cs40l26_asp_start(struct cs40l26_private *cs40l26)
 {
 	int error;
 
-	if (cs40l26->asp_scale_pct < CS40L26_GAIN_FULL_SCALE)
+	if (cs40l26->revid != CS40L26_REVID_B2 && cs40l26->asp_scale_pct < CS40L26_GAIN_FULL_SCALE)
 		queue_work(cs40l26->vibe_workqueue, &cs40l26->set_gain_work);
 
 	error = cs40l26_mailbox_write(cs40l26, CS40L26_STOP_PLAYBACK);
@@ -856,6 +836,10 @@ int cs40l26_asp_start(struct cs40l26_private *cs40l26)
 	}
 
 	reinit_completion(&cs40l26->i2s_cont);
+
+	error = regmap_read(cs40l26->regmap, CS40L26_REFCLK_INPUT, &cs40l26->refclk_input);
+	if (error)
+		return error;
 
 	return cs40l26_mailbox_write(cs40l26, CS40L26_DSP_MBOX_CMD_START_I2S);
 }
@@ -873,7 +857,8 @@ void cs40l26_vibe_state_update(struct cs40l26_private *cs40l26, enum cs40l26_vib
 	switch (event) {
 	case CS40L26_VIBE_STATE_EVENT_MBOX_PLAYBACK:
 	case CS40L26_VIBE_STATE_EVENT_GPIO_TRIGGER:
-		cs40l26_remove_asp_scaling(cs40l26);
+		if (cs40l26->revid != CS40L26_REVID_B2)
+			cs40l26_remove_asp_scaling(cs40l26);
 		cs40l26->effects_in_flight = cs40l26->effects_in_flight <= 0 ? 1 :
 			cs40l26->effects_in_flight + 1;
 		break;
@@ -889,7 +874,14 @@ void cs40l26_vibe_state_update(struct cs40l26_private *cs40l26, enum cs40l26_vib
 		cs40l26->asp_enable = true;
 		break;
 	case CS40L26_VIBE_STATE_EVENT_ASP_STOP:
-		cs40l26_remove_asp_scaling(cs40l26);
+		if (cs40l26->revid != CS40L26_REVID_B2)
+			cs40l26_remove_asp_scaling(cs40l26);
+
+		/* Restore PLL configuration */
+		if (cs40l26_set_pll_loop(cs40l26, cs40l26->refclk_input &
+				CS40L26_PLL_REFCLK_LOOP_MASK))
+			return;
+
 		cs40l26->asp_enable = false;
 		break;
 	default:
@@ -904,11 +896,7 @@ void cs40l26_vibe_state_update(struct cs40l26_private *cs40l26, enum cs40l26_vib
 	else
 		cs40l26->vibe_state = CS40L26_VIBE_STATE_STOPPED;
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	sysfs_notify(&cs40l26->dev->kobj, "default", "vibe_state");
-#else
-	sysfs_notify(&cs40l26->dev->kobj, NULL, "vibe_state");
-#endif
 }
 EXPORT_SYMBOL_GPL(cs40l26_vibe_state_update);
 
@@ -1887,19 +1875,14 @@ static void cs40l26_vibe_stop_worker(struct work_struct *work)
 		dev_info(cs40l26->dev, "Skipping delay\n");
 	}
 
-	if (cs40l26->vibe_state != CS40L26_VIBE_STATE_HAPTIC) {
-		dev_warn(cs40l26->dev, "Attempted stop when vibe_state = %d\n",
-				cs40l26->vibe_state);
-		goto mutex_exit;
+	if (!skip_delay) {
+		error = cs40l26_mailbox_write(cs40l26, CS40L26_STOP_PLAYBACK);
+		if (error)
+			dev_err(cs40l26->dev, "Failed to stop playback\n");
+	} else {
+		dev_dbg(cs40l26->dev, "Stop command skipped\n");
 	}
 
-	error = cs40l26_mailbox_write(cs40l26, CS40L26_STOP_PLAYBACK);
-	if (error) {
-		dev_err(cs40l26->dev, "Failed to stop playback\n");
-		goto mutex_exit;
-	}
-
-mutex_exit:
 	mutex_unlock(&cs40l26->lock);
 	cs40l26_pm_exit(cs40l26->dev);
 }
@@ -1908,9 +1891,7 @@ static void cs40l26_set_gain(struct input_dev *dev, u16 gain)
 {
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	ATRACE_BEGIN(__func__);
-#endif
 	if (gain >= CS40L26_NUM_PCT_MAP_VALUES) {
 		dev_err(cs40l26->dev, "Gain value %u %% out of bounds\n", gain);
 		return;
@@ -1919,9 +1900,7 @@ static void cs40l26_set_gain(struct input_dev *dev, u16 gain)
 	cs40l26->gain_pct = gain;
 
 	queue_work(cs40l26->vibe_workqueue, &cs40l26->set_gain_work);
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	ATRACE_END();
-#endif
 }
 
 static int cs40l26_playback_effect(struct input_dev *dev,
@@ -1930,9 +1909,7 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 	struct ff_effect *effect;
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	ATRACE_BEGIN(__func__);
-#endif
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d, val = %d\n", __func__, effect_id, val);
 
 	effect = &dev->ff->effects[effect_id];
@@ -1948,9 +1925,7 @@ static int cs40l26_playback_effect(struct input_dev *dev,
 	else
 		queue_work(cs40l26->vibe_workqueue, &cs40l26->vibe_stop_work);
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	ATRACE_END();
-#endif
 	return 0;
 }
 
@@ -2531,7 +2506,7 @@ sections_err_free:
 	return error;
 }
 
-static int cs40l26_rom_wt_init(struct cs40l26_private *cs40l26)
+int cs40l26_rom_wt_init(struct cs40l26_private *cs40l26)
 {
 	u32 *wt_be, reg, rom_wt_size_bytes;
 	int error, i;
@@ -2580,6 +2555,7 @@ data_free:
 	devm_kfree(cs40l26->dev, cs40l26->rom_wt.raw_data);
 	return error;
 }
+EXPORT_SYMBOL_GPL(cs40l26_rom_wt_init);
 
 static int cs40l26_sine_upload(struct cs40l26_private *cs40l26, struct ff_effect *effect,
 		struct cs40l26_uploaded_effect *ueffect)
@@ -2889,9 +2865,7 @@ static int cs40l26_upload_effect(struct input_dev *dev,
 	int len = effect->u.periodic.custom_len;
 	int error;
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	ATRACE_BEGIN(__func__);
-#endif
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d\n", __func__, effect->id);
 
 	memcpy(&cs40l26->upload_effect, effect, sizeof(struct ff_effect));
@@ -2925,9 +2899,7 @@ out_free:
 	memset(&cs40l26->upload_effect, 0, sizeof(struct ff_effect));
 	kfree(cs40l26->raw_custom_data);
 	cs40l26->raw_custom_data = NULL;
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	ATRACE_END();
-#endif
 
 	return error;
 }
@@ -3060,9 +3032,7 @@ static int cs40l26_erase_effect(struct input_dev *dev, int effect_id)
 	struct cs40l26_private *cs40l26 = input_get_drvdata(dev);
 	struct ff_effect *effect;
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	ATRACE_BEGIN(__func__);
-#endif
 	dev_dbg(cs40l26->dev, "%s: effect ID = %d\n", __func__, effect_id);
 
 	effect = &dev->ff->effects[effect_id];
@@ -3078,9 +3048,7 @@ static int cs40l26_erase_effect(struct input_dev *dev, int effect_id)
 	/* Wait for erase to finish */
 	flush_work(&cs40l26->erase_work);
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	ATRACE_END();
-#endif
 	return cs40l26->erase_ret;
 }
 
@@ -3093,11 +3061,7 @@ static int cs40l26_input_init(struct cs40l26_private *cs40l26)
 	if (!cs40l26->input)
 		return -ENOMEM;
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	cs40l26->input->name = cs40l26->device_name;
-#else
-	cs40l26->input->name = "cs40l26_input";
-#endif
 	cs40l26->input->id.product = cs40l26->devid;
 	cs40l26->input->id.version = cs40l26->revid;
 
@@ -3130,11 +3094,7 @@ static int cs40l26_input_init(struct cs40l26_private *cs40l26)
 		return error;
 	}
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	error = sysfs_create_groups(&cs40l26->dev->kobj, cs40l26_attr_groups);
-#else
-	error = sysfs_create_groups(&cs40l26->input->dev.kobj, cs40l26_attr_groups);
-#endif
 	if (error) {
 		dev_err(dev, "Failed to create sysfs groups\n");
 		return error;
@@ -3170,13 +3130,9 @@ static int cs40l26_part_num_resolve(struct cs40l26_private *cs40l26)
 
 	switch (fullid) {
 	case CS40L26_ID_L26A_A1:
-	case CS40L26_ID_L26B_A1:
 	case CS40L26_ID_L27A_A1:
-	case CS40L26_ID_L27B_A1:
 	case CS40L26_ID_L26A_B0:
-	case CS40L26_ID_L26B_B0:
 	case CS40L26_ID_L27A_B0:
-	case CS40L26_ID_L27B_B0:
 	case CS40L26_ID_L27A_B1:
 		cs40l26->rom_regs = &cs40l26_rom_regs_a1_b0_b1;
 		cs40l26->rom_data = &cs40l26_rom_data_a1_b0_b1;
@@ -3242,14 +3198,9 @@ static int cs40l26_gpio_config(struct cs40l26_private *cs40l26)
 		return error;
 
 	if (mask_gpio)
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 		/* Extend the GPIO trigger mask to ignore GPIO1 falling edge */
 		val = (u32) GENMASK(CS40L26_GPIO4_FALL_IRQ,
 				CS40L26_GPIO1_FALL_IRQ);
-#else
-		val = (u32) GENMASK(CS40L26_GPIO4_FALL_IRQ,
-				CS40L26_GPIO2_RISE_IRQ);
-#endif
 	else
 		val = 0;
 
@@ -3334,7 +3285,7 @@ static int cs40l26_brwnout_prevention_init(struct cs40l26_private *cs40l26)
 	if (cs40l26->vbbr.enable) {
 		pseq_mask = CS40L26_VBBR_ATT_CLR_MASK | CS40L26_VBBR_FLAG_MASK;
 
-		vbbr_config = (cs40l26->vbbr.thld_uv / CS40L26_VBBR_THLD_UV_DIV) &
+		vbbr_config = ((cs40l26->vbbr.thld_uv / CS40L26_VBBR_THLD_UV_DIV) + 1) &
 								CS40L26_VBBR_THLD_MASK;
 
 		vbbr_config |= ((cs40l26->vbbr.max_att_db << CS40L26_VXBR_MAX_ATT_SHIFT) &
@@ -3951,9 +3902,9 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 {
 	struct regmap *regmap = cs40l26->regmap;
 	struct device *dev = cs40l26->dev;
-	int error, nwaves;
 	unsigned int val;
 	u32 reg, value;
+	int error;
 
 	if (!cs40l26->fw_rom_only) {
 		error = regmap_update_bits(regmap, CS40L26_PWRMGT_CTL,
@@ -4106,13 +4057,15 @@ static int cs40l26_dsp_config(struct cs40l26_private *cs40l26)
 	if (error)
 		goto pm_err;
 
-	nwaves = cs40l26_num_waves(cs40l26);
-	if (nwaves < 0) {
-		error = nwaves;
-		goto pm_err;
+	if (cs40l26->revid == CS40L26_REVID_B2) {
+		error = cs40l26_mailbox_write(cs40l26, CS40L26_DSP_MBOX_CMD_OWT_RESET);
+		if (error)
+			goto pm_err;
 	}
 
-	dev_info(dev, "%s loaded with %u RAM waveforms\n", CS40L26_DEV_NAME, nwaves);
+	dev_info(dev, "%s loaded with %d RAM waveforms (%d from cs40l26.bin + %d from OWT)\n",
+			CS40L26_DEV_NAME, cs40l26_num_waves(cs40l26),
+			cs40l26_num_ram_waves(cs40l26), cs40l26_num_owt_waves(cs40l26));
 
 	value = (cs40l26->comp_enable_redc << CS40L26_COMP_EN_REDC_SHIFT) |
 			(cs40l26->comp_enable_f0 << CS40L26_COMP_EN_F0_SHIFT);
@@ -4498,11 +4451,9 @@ static int cs40l26_fw_upload(struct cs40l26_private *cs40l26)
 				return error;
 
 			break;
-
 		case CS40L26_FW_BRANCH:
 			le = cs40l26->svc_le_est_stored;
 			break;
-
 		default:
 			dev_err(dev, "Invalid firmware branch, %d", branch);
 			return -EINVAL;
@@ -4568,9 +4519,10 @@ int cs40l26_fw_swap(struct cs40l26_private *cs40l26, const u32 id)
 	case CS40L26_REVID_A1:
 	case CS40L26_REVID_B0:
 	case CS40L26_REVID_B1:
+	case CS40L26_REVID_B2:
 		break;
 	default:
-		dev_err(dev, "pseq unrecognized revid: %d\n", cs40l26->revid);
+		dev_err(dev, "Unrecognized revid: 0x%02X\n", cs40l26->revid);
 		return -EINVAL;
 	}
 
@@ -4824,11 +4776,10 @@ static int cs40l26_parse_properties(struct cs40l26_private *cs40l26)
 	struct device *dev = cs40l26->dev;
 	int error;
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 	error = device_property_read_string(dev, "input-device-name", &cs40l26->device_name);
 	if(error)
 		cs40l26->device_name = CS40L26_INPUT_DEV_NAME;
-#endif
+
 	cs40l26->fw_defer = device_property_present(dev, "cirrus,fw-defer");
 
 	cs40l26->fw_rom_only = device_property_present(dev, "cirrus,fw-rom-only");
@@ -4943,7 +4894,6 @@ static int cs40l26_parse_properties(struct cs40l26_private *cs40l26)
 	return cs40l26_no_wait_ram_indices_get(cs40l26);
 }
 
-#ifdef CONFIG_GOOG_CUST
 static int cs40l26_parse_device_id(struct cs40l26_private *cs40l26) {
 	struct device *dev = cs40l26->dev;
 	int error;
@@ -4960,7 +4910,6 @@ static int cs40l26_parse_device_id(struct cs40l26_private *cs40l26) {
 	}
 	return 0;
 }
-#endif
 
 int cs40l26_probe(struct cs40l26_private *cs40l26)
 {
@@ -4968,11 +4917,10 @@ int cs40l26_probe(struct cs40l26_private *cs40l26)
 	int error;
 
 	mutex_init(&cs40l26->lock);
-#ifdef CONFIG_GOOG_CUST
+
 	error = cs40l26_parse_device_id(cs40l26);
 	if(error)
 		goto err;
-#endif
 
 	cs40l26->vibe_workqueue = alloc_ordered_workqueue("vibe_workqueue", WQ_HIGHPRI);
 	if (!cs40l26->vibe_workqueue) {
@@ -4997,7 +4945,6 @@ int cs40l26_probe(struct cs40l26_private *cs40l26)
 	error = cs40l26_parse_properties(cs40l26);
 	if (error)
 		goto err;
-
 
 	error = regulator_bulk_enable(CS40L26_NUM_SUPPLIES, cs40l26_supplies);
 	if  (error) {
@@ -5060,13 +5007,6 @@ int cs40l26_probe(struct cs40l26_private *cs40l26)
 	init_completion(&cs40l26->cal_dvl_peq_cont);
 	init_completion(&cs40l26->cal_ls_cont);
 
-
-	error = cs40l26_rom_wt_init(cs40l26);
-	if (error) {
-		dev_err(cs40l26->dev, "Unable to store ROM wavetable\n");
-		goto err;
-	}
-
 	if (!cs40l26->fw_defer) {
 		error = cs40l26_fw_upload(cs40l26);
 		if (error)
@@ -5098,7 +5038,6 @@ err:
 }
 EXPORT_SYMBOL_GPL(cs40l26_probe);
 
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 void cs40l26_add_codec_devices(struct device *dev)
 {
 	int error;
@@ -5111,7 +5050,6 @@ void cs40l26_add_codec_devices(struct device *dev)
 	}
 }
 EXPORT_SYMBOL(cs40l26_add_codec_devices);
-#endif
 
 int cs40l26_remove(struct cs40l26_private *cs40l26)
 {
@@ -5141,11 +5079,7 @@ int cs40l26_remove(struct cs40l26_private *cs40l26)
 	gpiod_set_value_cansleep(cs40l26->reset_gpio, 1);
 
 	if (cs40l26->vibe_init_success)
-#if IS_ENABLED(CONFIG_GOOG_CUST)
 		sysfs_remove_groups(&cs40l26->dev->kobj, cs40l26_attr_groups);
-#else
-		sysfs_remove_groups(&cs40l26->input->dev.kobj, cs40l26_attr_groups);
-#endif
 
 #ifdef CONFIG_DEBUG_FS
 	cs40l26_debugfs_cleanup(cs40l26);
@@ -5270,6 +5204,4 @@ EXPORT_SYMBOL_GPL(cs40l26_pm_ops);
 MODULE_DESCRIPTION("CS40L26 Boosted Mono Class D Amplifier for Haptics");
 MODULE_AUTHOR("Fred Treven, Cirrus Logic Inc. <fred.treven@cirrus.com>");
 MODULE_LICENSE("GPL");
-#if IS_ENABLED(CONFIG_GOOG_CUST)
-MODULE_VERSION("12.1.2");
-#endif
+MODULE_VERSION("14.0.0");
