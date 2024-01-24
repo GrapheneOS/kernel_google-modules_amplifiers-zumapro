@@ -11,7 +11,11 @@
 // it under the terms of the GNU General Public License version 2 as
 // published by the Free Software Foundation.
 
+#if IS_ENABLED(CONFIG_GOOG_CUST)
 #include "cs40l26.h"
+#else
+#include <linux/mfd/cs40l26.h>
+#endif
 
 const struct regmap_config cs40l26_regmap = {
 	.reg_bits = 32,
@@ -53,10 +57,14 @@ struct regulator_bulk_data cs40l26_supplies[CS40L26_NUM_SUPPLIES] = {
 };
 
 const struct mfd_cell cs40l26_devs[CS40L26_NUM_MFD_DEVS] = {
+#if IS_ENABLED(CONFIG_GOOG_CUST)
 	{
 		.name = "cs40l26-codec",
 		.of_compatible = "cs40l26-codec",
 	},
+#else
+	{ .name = "cs40l26-codec" },
+#endif
 };
 
 const u32 cs40l26_attn_q21_2_vals[CS40L26_NUM_PCT_MAP_VALUES] = {

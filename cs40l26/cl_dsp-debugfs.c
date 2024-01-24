@@ -220,21 +220,17 @@ static int cl_dsp_host_buffer_data_read(struct cl_dsp_debugfs *db,
 	u32 start_reg, offset = db->dl.buf_data_size;
 	struct regmap *regmap = db->core->regmap;
 	struct device *dev = db->core->dev;
-	size_t new_data_size;
-	u32 *new_data;
 	int ret;
 
 	start_reg = host_buffer_data_reg(&db->dl, (unsigned long)read_index);
 
-	new_data_size = db->dl.buf_data_size + num_words;
-	new_data = krealloc(db->dl.buf_data, new_data_size * sizeof(u32), GFP_KERNEL);
-	if (IS_ERR_OR_NULL(new_data)) {
-		dev_err(dev, "Failed to re-allocate buffer data space\n");
+	db->dl.buf_data_size += num_words;
+	db->dl.buf_data = krealloc(db->dl.buf_data, db->dl.buf_data_size * 4,
+			GFP_KERNEL);
+	if (!db->dl.buf_data || IS_ERR(db->dl.buf_data)) {
+		dev_err(dev, "Failed to allocate buffer data space\n");
 		return -ENOMEM;
 	}
-	db->dl.buf_data_size = new_data_size;
-
-	db->dl.buf_data = new_data;
 
 	ret = regmap_bulk_read(regmap, start_reg, db->dl.buf_data + offset,
 			num_words);
@@ -323,15 +319,21 @@ int cl_dsp_logger_update(struct cl_dsp_debugfs *db)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(cl_dsp_logger_update);
+EXPORT_SYMBOL(cl_dsp_logger_update);
 
 static int cl_dsp_debugfs_logger_open(struct inode *inode, struct file *file)
 {
+#if !IS_ENABLED(CONFIG_GOOG_CUST)
+	struct cl_dsp_debugfs *db;
+#endif
 	int ret;
 
 	ret = simple_open(inode, file);
 	if (ret)
 		return ret;
+#if !IS_ENABLED(CONFIG_GOOG_CUST)
+	db = file->private_data;
+#endif
 	return 0;
 }
 
@@ -507,7 +509,7 @@ struct cl_dsp_debugfs *cl_dsp_debugfs_create(struct cl_dsp *dsp,
 
 	return db;
 }
-EXPORT_SYMBOL_GPL(cl_dsp_debugfs_create);
+EXPORT_SYMBOL(cl_dsp_debugfs_create);
 
 void cl_dsp_debugfs_destroy(struct cl_dsp_debugfs *db)
 {
@@ -517,7 +519,7 @@ void cl_dsp_debugfs_destroy(struct cl_dsp_debugfs *db)
 	debugfs_remove_recursive(db->debugfs_node);
 	kfree(db);
 }
-EXPORT_SYMBOL_GPL(cl_dsp_debugfs_destroy);
+EXPORT_SYMBOL(cl_dsp_debugfs_destroy);
 
 #endif /* CONFIG_DEBUG_FS */
 
