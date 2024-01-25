@@ -267,7 +267,10 @@ static void cs40l26_hw_debugfs_init(struct cs40l26_private *cs40l26)
 	cs40l26->debugfs_hw_node = debugfs_create_dir("hardware", cs40l26->debugfs_root);
 	if (IS_ERR_OR_NULL(cs40l26->debugfs_hw_node)) {
 		dev_err(cs40l26->dev, "Failed to mount hardware debugfs directory\n");
+#if 0
+		// Causes Kernel panic when taking an error pointer.
 		kfree(cs40l26->debugfs_hw_node);
+#endif
 		return;
 	}
 
@@ -284,9 +287,11 @@ void cs40l26_debugfs_init(struct cs40l26_private *cs40l26)
 
 	cs40l26_debugfs_cleanup(cs40l26);
 
-	root = debugfs_create_dir("cs40l26", NULL);
-	if (!root)
+	root = debugfs_create_dir(cs40l26->device_name, NULL);
+	if (IS_ERR_OR_NULL(root)) {
+		dev_err(cs40l26->dev, "Failed to create %s", cs40l26->device_name);
 		return;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(cs40l26_debugfs_fops); i++)
 		debugfs_create_file(cs40l26_debugfs_fops[i].name, CL_DSP_DEBUGFS_RW_FILE_MODE,
