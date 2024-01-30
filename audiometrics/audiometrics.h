@@ -36,4 +36,6 @@ enum {
 	WDSP_STAT_UP,
 };
 
+typedef int (*pdm_callback)(void* priv, int index);
+extern void pdm_callback_register(pdm_callback callback, int pdm_number, void* pdm_priv);
 #endif /* _AUDIOMETRICS_H */

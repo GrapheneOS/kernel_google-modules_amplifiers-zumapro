@@ -1,13 +1,12 @@
-// SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
-/*
- * cs35l45-spi.c -- CS35L45 SPI driver
- *
- * Copyright 2019 Cirrus Logic, Inc.
- *
- * Author: James Schulman <james.schulman@cirrus.com>
- *
- */
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+//
+// cs35l45-spi.c -- CS35L45 SPI driver
+//
+// Copyright 2019-2022 Cirrus Logic, Inc.
+//
+// Author: James Schulman <james.schulman@cirrus.com>
 
+#include <linux/device.h>
 #include <linux/module.h>
 #include <linux/spi/spi.h>
 #include <linux/regulator/consumer.h>
@@ -66,13 +65,13 @@ static void cs35l45_spi_remove(struct spi_device *spi)
 }
 
 static const struct of_device_id cs35l45_of_match[] = {
-	{.compatible = "cirrus,cs35l45"},
+	{ .compatible = "cirrus,cs35l45" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, cs35l45_of_match);
 
 static const struct spi_device_id cs35l45_id_spi[] = {
-	{"cs35l45", 0},
+	{ "cs35l45", 0 },
 	{}
 };
 MODULE_DEVICE_TABLE(spi, cs35l45_id_spi);
@@ -81,6 +80,7 @@ static struct spi_driver cs35l45_spi_driver = {
 	.driver = {
 		.name		= "cs35l45",
 		.of_match_table = cs35l45_of_match,
+		.pm = &cs35l45_pm_ops,
 	},
 	.id_table	= cs35l45_id_spi,
 	.probe		= cs35l45_spi_probe,
