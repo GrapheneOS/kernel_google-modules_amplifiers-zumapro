@@ -47,7 +47,7 @@ const u8 cs40l26_pseq_op_sizes[CS40L26_PSEQ_NUM_OPS][2] = {
 	{ CS40L26_PSEQ_OP_END, CS40L26_PSEQ_OP_END_WORDS },
 };
 
-struct regulator_bulk_data cs40l26_supplies[CS40L26_NUM_SUPPLIES] = {
+const struct regulator_bulk_data cs40l26_supplies[CS40L26_NUM_SUPPLIES] = {
 	{ .supply = CS40L26_VP_SUPPLY_NAME },
 	{ .supply = CS40L26_VA_SUPPLY_NAME },
 };

@@ -1045,6 +1045,7 @@ struct cs40l26_private {
 	u32 devid : 24;
 	u8 revid;
 	struct mutex lock;
+	struct regulator_bulk_data *reg_supplies;
 	struct gpio_desc *reset_gpio;
 	struct input_dev *input;
 	struct cl_dsp *dsp;
@@ -1206,7 +1207,7 @@ static int cs40l26_probed_retry_count[CS40L26_MAX_DEVICES];
 void cs40l26_add_codec_devices(struct device *dev);
 
 /* external tables */
-extern struct regulator_bulk_data cs40l26_supplies[CS40L26_NUM_SUPPLIES];
+extern const struct regulator_bulk_data cs40l26_supplies[CS40L26_NUM_SUPPLIES];
 extern const struct dev_pm_ops cs40l26_pm_ops;
 extern const struct regmap_config cs40l26_regmap;
 extern const struct mfd_cell cs40l26_devs[CS40L26_NUM_MFD_DEVS];

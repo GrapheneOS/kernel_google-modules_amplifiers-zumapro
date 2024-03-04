@@ -4936,7 +4936,8 @@ int cs40l26_probe(struct cs40l26_private *cs40l26)
 
 	timer_setup(&cs40l26->hibernate_timer, cs40l26_hibernate_timer_callback, 0);
 
-	error = devm_regulator_bulk_get(dev, CS40L26_NUM_SUPPLIES, cs40l26_supplies);
+	error = devm_regulator_bulk_get_const(dev, CS40L26_NUM_SUPPLIES,
+					      cs40l26_supplies, &cs40l26->reg_supplies);
 	if (error) {
 		dev_err(dev, "Failed to request core supplies: %d\n", error);
 		goto err;
@@ -4946,7 +4947,7 @@ int cs40l26_probe(struct cs40l26_private *cs40l26)
 	if (error)
 		goto err;
 
-	error = regulator_bulk_enable(CS40L26_NUM_SUPPLIES, cs40l26_supplies);
+	error = regulator_bulk_enable(CS40L26_NUM_SUPPLIES, cs40l26->reg_supplies);
 	if  (error) {
 		dev_err(dev, "Failed to enable core supplies\n");
 		goto err;
@@ -5053,8 +5054,8 @@ EXPORT_SYMBOL(cs40l26_add_codec_devices);
 
 int cs40l26_remove(struct cs40l26_private *cs40l26)
 {
-	struct regulator *vp_consumer = cs40l26_supplies[CS40L26_VP_SUPPLY].consumer;
-	struct regulator *va_consumer = cs40l26_supplies[CS40L26_VA_SUPPLY].consumer;
+	struct regulator *vp_consumer = cs40l26->reg_supplies[CS40L26_VP_SUPPLY].consumer;
+	struct regulator *va_consumer = cs40l26->reg_supplies[CS40L26_VA_SUPPLY].consumer;
 
 	disable_irq(cs40l26->irq);
 	mutex_destroy(&cs40l26->lock);
