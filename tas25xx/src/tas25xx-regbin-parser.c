@@ -1575,11 +1575,28 @@ static int32_t tas25xx_parse_kcontrols(struct tas25xx_priv *p_tas25xx, uint8_t *
 		goto EXIT;
 	}
 
+	p_tas25xx->playback_volume_left_index = -1;
+	p_tas25xx->playback_volume_right_index = -1;
+
 	for (i = 0; i < g_no_of_kcontrols; i++) {
 		memcpy(&(g_kctrl_data[i].type), buf, 1);
 		buf += 1;
 		/* Integer Type */
 		if (g_kctrl_data[i].type == 0) {
+			if (p_tas25xx->playback_volume_left_index == -1
+				&& !strcmp(buf, "PLAYBACK_VOLUME_LEFT")) {
+				p_tas25xx->playback_volume_left_index = i;
+				dev_dbg(plat_data->dev,
+					"%s: update playback_volume_left_index = %d\n",
+					__func__, p_tas25xx->playback_volume_left_index);
+			}
+			if (p_tas25xx->playback_volume_right_index == -1
+				&& !strcmp(buf, "PLAYBACK_VOLUME_RIGHT")) {
+				p_tas25xx->playback_volume_right_index = i;
+				dev_dbg(plat_data->dev,
+					"%s: update playback_volume_right_index = %d\n",
+					__func__, p_tas25xx->playback_volume_right_index);
+			}
 
 			g_kctrl_data[i].kcontrol.int_type.name = kasprintf(GFP_KERNEL, "%s %s",
 					"TAS25XX", (char *)buf);
@@ -2504,3 +2521,31 @@ int32_t tas25xx_remove_binfile(struct tas25xx_priv *p_tas25xx)
 
 	return 0;
 }
+
+int32_t tas25xx_update_playback_volume(struct tas25xx_priv *p_tas25xx, int32_t ch)
+{
+	int32_t kcontrol_index;
+	int32_t v_idx;
+	int32_t misc_info;
+	int32_t ret = 0;
+	struct linux_platform *plat_data = NULL;
+
+	plat_data = (struct linux_platform *) p_tas25xx->platform_data;
+	kcontrol_index = (ch == 0)?p_tas25xx->playback_volume_left_index:
+			p_tas25xx->playback_volume_right_index;
+
+	if (kcontrol_index < 0) {
+		dev_err(plat_data->dev, "ch-%d %s invalid kcontrol index %d\n",
+				ch, __func__, kcontrol_index);
+		return -EINVAL;
+	}
+	v_idx = g_kctrl_data[kcontrol_index].kcontrol.int_type.curr_val;
+	misc_info = g_kctrl_data[kcontrol_index].kcontrol.int_type.misc_info;
+
+	if (((misc_info & 0xf) == KCNTR_ANYTIME) ||
+		(p_tas25xx->m_power_state == TAS_POWER_ACTIVE))
+		ret = tas25xx_int_put_idx_value(p_tas25xx, kcontrol_index, v_idx);
+
+	return ret;
+}
+

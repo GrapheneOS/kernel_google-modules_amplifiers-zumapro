@@ -116,5 +116,7 @@ int tas_write_init_config_params(struct tas25xx_priv *p_tas25xx, int number_of_c
 int32_t tas25xx_update_kcontrol_data(struct tas25xx_priv *p_tas25xx, enum kcntl_during_t cur_state,
 	uint32_t chmask);
 
+int32_t tas25xx_update_playback_volume(struct tas25xx_priv *p_tas25xx, int32_t ch);
+
 void tas25xx_prep_dev_for_calib(int start);
 #endif /* __TAS25XX_REGBIN_PARSER__ */
