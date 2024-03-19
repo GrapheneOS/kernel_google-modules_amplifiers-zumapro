@@ -410,6 +410,7 @@ struct tas25xx_priv {
 	struct tas_block_op_data_t block_op_data[MAX_CHANNELS];
 	int32_t playback_volume_left_index;
 	int32_t playback_volume_right_index;
+	int irqz_value;
 };
 
 static inline int is_power_up_state(enum tas_power_states_t state)
