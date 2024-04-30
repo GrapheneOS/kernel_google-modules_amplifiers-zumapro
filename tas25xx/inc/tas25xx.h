@@ -411,6 +411,8 @@ struct tas25xx_priv {
 	int32_t playback_volume_left_index;
 	int32_t playback_volume_right_index;
 	int irqz_value;
+	int left_em_mode;
+	int right_em_mode;
 };
 
 static inline int is_power_up_state(enum tas_power_states_t state)

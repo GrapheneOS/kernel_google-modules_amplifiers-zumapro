@@ -923,6 +923,8 @@ static int tas25xx_i2c_probe(struct i2c_client *p_client,
 	plat_data->runtime_resume = tas25xx_runtime_resume;
 #endif
 	p_tas25xx->m_power_state = TAS_POWER_SHUTDOWN;
+	p_tas25xx->left_em_mode = -1;
+	p_tas25xx->right_em_mode = -1;
 
 	if (p_client->dev.of_node) {
 		ret = tas25xx_parse_dt(&p_client->dev, p_tas25xx);

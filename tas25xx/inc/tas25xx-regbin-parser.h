@@ -57,6 +57,10 @@
 
 #define TAS25XX_DEFAULT	0xFFFFFFFF
 
+#define TAS25XX_EM_REG		0x03
+#define TAS25XX_EM_SHIFT	6
+#define TAS25XX_EM_MASK		0xC0
+
 enum kcntl_during_t {
 	KCNTR_ANYTIME = 0, /* instant update */
 	KCNTR_PRE_POWERUP = 1, /* during pre-power up */
