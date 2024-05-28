@@ -135,7 +135,7 @@
 
 /* Device */
 #define CS40L26_MAX_DEVICES		2
-#define CS40L26_MAX_PROBE_RETRY		2
+#define CS40L26_MAX_PROBE_RETRY		1
 #define CS40L26_DEV_NAME		"CS40L26"
 #define CS40L26_INPUT_DEV_NAME		"cs40l26_input"
 
