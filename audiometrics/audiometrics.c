@@ -1216,8 +1216,6 @@ static long amcs_cdev_compat_ioctl(struct file *file, unsigned int cmd, unsigned
 
 	return amcs_cdev_unlocked_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
 }
-#else
-#define amcs_cdev_compat_ioctl NULL;
 #endif
 
 static char *amcs_devnode(struct device *dev, umode_t *mode)
@@ -1308,7 +1306,9 @@ static const struct file_operations amcs_fops = {
 	.open = amcs_cdev_open,
 	.release = amcs_cdev_release,
 	.unlocked_ioctl = amcs_cdev_unlocked_ioctl,
+#ifdef CONFIG_COMPAT
 	.compat_ioctl = amcs_cdev_compat_ioctl,
+#endif
 
 	.owner = THIS_MODULE,
 };
